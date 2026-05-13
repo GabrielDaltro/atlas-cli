@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\AtlasCli.Application\AtlasCli.Application.csproj" />
+    <ProjectReference Include="..\AtlasCli.Infrastructure.Bitbucket\AtlasCli.Infrastructure.Bitbucket.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>AtlasCli</AssemblyName>
+    <RootNamespace>AtlasCli</RootNamespace>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
