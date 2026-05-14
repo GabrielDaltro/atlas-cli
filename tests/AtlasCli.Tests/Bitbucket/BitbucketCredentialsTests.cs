@@ -70,6 +70,27 @@ public sealed class BitbucketCredentialsTests
     }
 
     [Fact]
+    public void ShouldLoadBranchesTokenWhenBranchesTokenSuffixIsRequested()
+    {
+        var environment = new DictionaryEnvironment(new Dictionary<string, string>
+        {
+            ["BITBUCKET_DYNAMOXTEAM_EMAIL"] = "developer@example.com",
+            ["BB_DYNAMOXTEAM_GET_PR_BRANCHES_TOKEN"] = "branches-token"
+        });
+
+        var loaded = BitbucketCredentials.TryFromEnvironment(
+            environment.GetVariable,
+            "dynamoxteam",
+            "GET_PR_BRANCHES_TOKEN",
+            out var credentials,
+            out var error);
+
+        Assert.True(loaded);
+        Assert.Null(error);
+        Assert.Equal("branches-token", credentials!.Token);
+    }
+
+    [Fact]
     public void ShouldConvertHyphenatedWorkspaceToEnvironmentKeyWhenWorkspaceHasHyphen()
     {
         var key = BitbucketCredentials.ToEnvironmentKey("my-team");

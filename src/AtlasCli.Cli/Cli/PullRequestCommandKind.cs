@@ -4,5 +4,6 @@ public enum PullRequestCommandKind
 {
     GetComments,
     GetTasks,
-    GetReports
+    GetReports,
+    GetBranches
 }

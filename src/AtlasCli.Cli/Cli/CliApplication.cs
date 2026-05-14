@@ -80,6 +80,13 @@ public static class CliApplication
                 return 0;
             }
 
+            if (parseResult.Options.Command is PullRequestCommandKind.GetBranches)
+            {
+                var branches = await pullRequestApplicationService.GetBranchesAsync(pullRequest, cancellationToken);
+                await BranchOutputWriter.WriteAsync(branches, parseResult.Options.OutputFormat, standardOutput);
+                return 0;
+            }
+
             if (parseResult.Options.Command is PullRequestCommandKind.GetTasks)
             {
                 var tasks = await pullRequestApplicationService.GetTasksAsync(pullRequest, cancellationToken);
@@ -132,6 +139,7 @@ public static class CliApplication
             PullRequestCommandKind.GetComments => GetCommentsHelpText,
             PullRequestCommandKind.GetTasks => GetTasksHelpText,
             PullRequestCommandKind.GetReports => GetReportsHelpText,
+            PullRequestCommandKind.GetBranches => GetBranchesHelpText,
             _ => GeneralHelpText
         };
     }
@@ -143,6 +151,7 @@ public static class CliApplication
           bb-get-pr-comments   Le comentarios de um pull request.
           bb-get-pr-tasks      Le tasks de um pull request.
           bb-get-pr-reports    Le reports de Code Insights do commit de origem do pull request.
+          bb-get-pr-branches   Le as branches de origem e destino de um pull request.
 
         Formas equivalentes:
           atlascli bb-get-pr-comments ...
@@ -152,6 +161,7 @@ public static class CliApplication
           atlascli bb-get-pr-comments --help
           atlascli bb-get-pr-tasks --help
           atlascli bb-get-pr-reports --help
+          atlascli bb-get-pr-branches --help
 
         Opcoes comuns:
           --repo <workspace/repositorio>  Repositorio quando --pr recebe apenas o numero.
@@ -227,6 +237,27 @@ public static class CliApplication
 
         Exemplo:
           atlascli bb-get-pr-reports --pr "https://bitbucket.org/dynamoxteam/dotnet-apps-common-libs/pull-requests/682" --output json
+        """;
+
+    private const string GetBranchesHelpText = """
+        bb-get-pr-branches
+
+        Le as branches de origem e destino de um pull request.
+
+        Uso:
+          atlascli bb-get-pr-branches --repo <workspace/repositorio> --pr <numero-do-pr> [--output table|json]
+          atlascli bb-get-pr-branches --pr <url-do-pr> [--output table|json]
+          atlascli bb-get-pr-branches --url <url-do-pr> [--output table|json]
+
+        Opcoes:
+          --output <table|json>           Formato de saida. Padrao: table.
+
+        Variaveis:
+          BITBUCKET_<WORKSPACE>_EMAIL
+          BB_<WORKSPACE>_GET_PR_BRANCHES_TOKEN
+
+        Exemplo:
+          atlascli bb-get-pr-branches --pr "https://bitbucket.org/dynamoxteam/dotnet-apps-common-libs/pull-requests/682" --output json
         """;
 
 }

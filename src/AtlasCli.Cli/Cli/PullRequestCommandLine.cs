@@ -128,6 +128,13 @@ public static class PullRequestCommandLine
             return true;
         }
 
+        if (IsCommand(args[0], "bb-get-pr-branches"))
+        {
+            command = PullRequestCommandKind.GetBranches;
+            nextIndex = 1;
+            return true;
+        }
+
         if (args.Length < 2 || !IsCommand(args[0], "bb"))
         {
             return false;
@@ -150,6 +157,13 @@ public static class PullRequestCommandLine
         if (IsCommand(args[1], "get-pr-reports"))
         {
             command = PullRequestCommandKind.GetReports;
+            nextIndex = 2;
+            return true;
+        }
+
+        if (IsCommand(args[1], "get-pr-branches"))
+        {
+            command = PullRequestCommandKind.GetBranches;
             nextIndex = 2;
             return true;
         }

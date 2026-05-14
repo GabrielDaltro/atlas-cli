@@ -94,26 +94,7 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
         PullRequestReference pullRequest,
         CancellationToken cancellationToken = default)
     {
-        var url = BuildPullRequestUrl(pullRequest);
-
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.Authorization = new AuthenticationHeaderValue(
-            "Basic",
-            _credentials.ToBasicAuthenticationParameter());
-
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-        {
-            var details = await response.Content.ReadAsStringAsync(cancellationToken);
-            throw new BitbucketApiException(
-                response.StatusCode,
-                BuildErrorMessage(pullRequest, "metadados", response, details));
-        }
-
-        await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        var pullRequestDetails = await JsonSerializer.DeserializeAsync<BitbucketPullRequest>(responseStream, JsonOptions, cancellationToken)
-            ?? new BitbucketPullRequest();
+        var pullRequestDetails = await GetPullRequestAsync(pullRequest, cancellationToken);
 
         if (string.IsNullOrWhiteSpace(pullRequestDetails.Source?.Commit?.Hash))
         {
@@ -123,6 +104,25 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
         }
 
         return pullRequestDetails.Source.Commit.Hash;
+    }
+
+    public async Task<PullRequestBranches> GetPullRequestBranchesAsync(
+        PullRequestReference pullRequest,
+        CancellationToken cancellationToken = default)
+    {
+        var pullRequestDetails = await GetPullRequestAsync(pullRequest, cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(pullRequestDetails.Source?.Branch?.Name)
+            || string.IsNullOrWhiteSpace(pullRequestDetails.Destination?.Branch?.Name))
+        {
+            throw new BitbucketApiException(
+                System.Net.HttpStatusCode.NotFound,
+                $"Bitbucket nao retornou as branches de origem e destino do PR {pullRequest.Workspace}/{pullRequest.Repository}#{pullRequest.Number}.");
+        }
+
+        return new PullRequestBranches(
+            pullRequestDetails.Source.Branch.Name,
+            pullRequestDetails.Destination.Branch.Name);
     }
 
     public async Task<IReadOnlyList<PullRequestReport>> GetCommitReportsAsync(
@@ -167,6 +167,32 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
         var repository = Uri.EscapeDataString(pullRequest.Repository);
         var relativeUrl = $"repositories/{workspace}/{repository}/pullrequests/{pullRequest.Number}";
         return new Uri(_apiBaseUrl, relativeUrl).ToString();
+    }
+
+    private async Task<BitbucketPullRequest> GetPullRequestAsync(
+        PullRequestReference pullRequest,
+        CancellationToken cancellationToken)
+    {
+        var url = BuildPullRequestUrl(pullRequest);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Basic",
+            _credentials.ToBasicAuthenticationParameter());
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var details = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new BitbucketApiException(
+                response.StatusCode,
+                BuildErrorMessage(pullRequest, "metadados", response, details));
+        }
+
+        await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await JsonSerializer.DeserializeAsync<BitbucketPullRequest>(responseStream, JsonOptions, cancellationToken)
+            ?? new BitbucketPullRequest();
     }
 
     private string BuildCommentsUrl(PullRequestReference pullRequest)
@@ -336,12 +362,30 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
     {
         [JsonPropertyName("source")]
         public BitbucketPullRequestSource? Source { get; init; }
+
+        [JsonPropertyName("destination")]
+        public BitbucketPullRequestDestination? Destination { get; init; }
     }
 
     private sealed class BitbucketPullRequestSource
     {
         [JsonPropertyName("commit")]
         public BitbucketPullRequestCommit? Commit { get; init; }
+
+        [JsonPropertyName("branch")]
+        public BitbucketPullRequestBranch? Branch { get; init; }
+    }
+
+    private sealed class BitbucketPullRequestDestination
+    {
+        [JsonPropertyName("branch")]
+        public BitbucketPullRequestBranch? Branch { get; init; }
+    }
+
+    private sealed class BitbucketPullRequestBranch
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
     }
 
     private sealed class BitbucketPullRequestCommit

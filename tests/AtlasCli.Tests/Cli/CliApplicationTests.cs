@@ -22,6 +22,7 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("Comandos:", standardOutput.ToString());
         Assert.Contains("bb-get-pr-reports", standardOutput.ToString());
+        Assert.Contains("bb-get-pr-branches", standardOutput.ToString());
         Assert.Equal(string.Empty, standardError.ToString());
     }
 
@@ -40,6 +41,24 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("BB_<WORKSPACE>_GET_PR_REPORTS_TOKEN", standardOutput.ToString());
         Assert.DoesNotContain("BB_<WORKSPACE>_GET_PR_TASKS_TOKEN", standardOutput.ToString());
+        Assert.Equal(string.Empty, standardError.ToString());
+    }
+
+    [Fact]
+    public async Task ShouldPrintBranchesCommandHelpWhenBranchesHelpIsProvided()
+    {
+        using var standardOutput = new StringWriter();
+        using var standardError = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(
+            ["bb-get-pr-branches", "--help"],
+            new DictionaryEnvironment(new Dictionary<string, string>()),
+            standardOutput,
+            standardError);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("BB_<WORKSPACE>_GET_PR_BRANCHES_TOKEN", standardOutput.ToString());
+        Assert.DoesNotContain("BB_<WORKSPACE>_GET_PR_REPORTS_TOKEN", standardOutput.ToString());
         Assert.Equal(string.Empty, standardError.ToString());
     }
 
@@ -198,6 +217,46 @@ public sealed class CliApplicationTests
         Assert.Equal(1, json.RootElement.GetProperty("count").GetInt32());
         Assert.Equal("SonarCloud", json.RootElement.GetProperty("data")[0].GetProperty("reporter").GetString());
         Assert.Equal("FAILED", json.RootElement.GetProperty("data")[0].GetProperty("result").GetString());
+    }
+
+    [Fact]
+    public async Task ShouldReturnBranchesJsonEnvelopeWhenCommandIsGetPrBranches()
+    {
+        var environment = new DictionaryEnvironment(new Dictionary<string, string>
+        {
+            ["BITBUCKET_WORKSPACE_EMAIL"] = "developer@example.com",
+            ["BB_WORKSPACE_GET_PR_BRANCHES_TOKEN"] = "token"
+        });
+        using var standardOutput = new StringWriter();
+        using var standardError = new StringWriter();
+        using var httpHandler = new StubHttpMessageHandler(HttpStatusCode.OK, """
+            {
+              "source": {
+                "branch": {
+                  "name": "feature/minha-branch"
+                }
+              },
+              "destination": {
+                "branch": {
+                  "name": "master"
+                }
+              }
+            }
+            """);
+
+        var exitCode = await CliApplication.RunAsync(
+            ["bb-get-pr-branches", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1", "--output", "json"],
+            environment,
+            standardOutput,
+            standardError,
+            httpHandler);
+
+        using var json = JsonDocument.Parse(standardOutput.ToString());
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, standardError.ToString());
+        Assert.True(json.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("feature/minha-branch", json.RootElement.GetProperty("data").GetProperty("source").GetString());
+        Assert.Equal("master", json.RootElement.GetProperty("data").GetProperty("target").GetString());
     }
 
     [Fact]

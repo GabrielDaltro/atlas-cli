@@ -27,6 +27,13 @@ public sealed class PullRequestApplicationService
         return _gateway.GetPullRequestTasksAsync(pullRequest, cancellationToken);
     }
 
+    public Task<PullRequestBranches> GetBranchesAsync(
+        PullRequestReference pullRequest,
+        CancellationToken cancellationToken = default)
+    {
+        return _gateway.GetPullRequestBranchesAsync(pullRequest, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<PullRequestReport>> GetReportsAsync(
         PullRequestReference pullRequest,
         CancellationToken cancellationToken = default)

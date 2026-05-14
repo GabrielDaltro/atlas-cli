@@ -10,6 +10,10 @@ public interface IBitbucketPullRequestGateway
         PullRequestReference pullRequest,
         CancellationToken cancellationToken = default);
 
+    Task<PullRequestBranches> GetPullRequestBranchesAsync(
+        PullRequestReference pullRequest,
+        CancellationToken cancellationToken = default);
+
     Task<string> GetPullRequestSourceCommitAsync(
         PullRequestReference pullRequest,
         CancellationToken cancellationToken = default);

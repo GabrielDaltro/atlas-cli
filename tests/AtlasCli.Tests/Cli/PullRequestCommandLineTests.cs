@@ -65,6 +65,17 @@ public sealed class PullRequestCommandLineTests
     }
 
     [Fact]
+    public void ShouldParseBranchesCommandWhenCommandIsGetPrBranches()
+    {
+        var result = PullRequestCommandLine.Parse(
+            ["bb-get-pr-branches", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1"]);
+
+        Assert.False(result.IsHelp);
+        Assert.Null(result.Error);
+        Assert.Equal(PullRequestCommandKind.GetBranches, result.Options!.Command);
+    }
+
+    [Fact]
     public void ShouldParseJsonOutputWhenOutputIsJson()
     {
         var result = PullRequestCommandLine.Parse(
