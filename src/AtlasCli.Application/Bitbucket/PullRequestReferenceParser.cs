@@ -36,25 +36,25 @@ public static class PullRequestReferenceParser
         }
 
         return PullRequestReferenceParseResult.Success(new PullRequestReference(
-            repositoryParseResult.Workspace!,
-            repositoryParseResult.Repository!,
+            repositoryParseResult.Reference!.Workspace,
+            repositoryParseResult.Reference.Repository,
             pullRequestNumber));
     }
 
-    private static RepositoryParseResult ParseRepository(string? repositoryOption)
+    public static RepositoryReferenceParseResult ParseRepository(string? repositoryOption)
     {
         if (string.IsNullOrWhiteSpace(repositoryOption))
         {
-            return RepositoryParseResult.Failure("--repo e obrigatorio quando --pr recebe apenas o numero do PR.");
+            return RepositoryReferenceParseResult.Failure("--repo e obrigatorio quando --pr recebe apenas o numero do PR.");
         }
 
         var parts = repositoryOption.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length != 2)
         {
-            return RepositoryParseResult.Failure("--repo deve estar no formato <workspace/repositorio>.");
+            return RepositoryReferenceParseResult.Failure("--repo deve estar no formato <workspace/repositorio>.");
         }
 
-        return RepositoryParseResult.Success(parts[0], parts[1]);
+        return RepositoryReferenceParseResult.Success(new RepositoryReference(parts[0], parts[1]));
     }
 
     private static PullRequestReferenceParseResult ParseUrl(string url)
@@ -96,23 +96,5 @@ public static class PullRequestReferenceParser
     {
         return value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
             || value.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private sealed record RepositoryParseResult(
-        string? Workspace,
-        string? Repository,
-        string? ErrorMessage)
-    {
-        public bool IsSuccess => Workspace is not null && Repository is not null;
-
-        public static RepositoryParseResult Success(string workspace, string repository)
-        {
-            return new RepositoryParseResult(workspace, repository, null);
-        }
-
-        public static RepositoryParseResult Failure(string errorMessage)
-        {
-            return new RepositoryParseResult(null, null, errorMessage);
-        }
     }
 }

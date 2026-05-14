@@ -31,23 +31,16 @@ public static class CliApplication
             return 1;
         }
 
-        var referenceResult = PullRequestReferenceParser.Parse(new PullRequestReferenceInput(
-            parseResult.Options.Repository,
-            parseResult.Options.PullRequest,
-            parseResult.Options.Url));
-
-        if (!referenceResult.IsSuccess)
+        if (!TryResolveBitbucketContext(parseResult.Options, out var repository, out var pullRequest, out var validationError))
         {
             await ErrorOutputWriter.WriteAsync(
-                new CliError(ErrorCodes.ValidationError, referenceResult.ErrorMessage!),
+                validationError!,
                 parseResult.Options.OutputFormat,
                 standardError);
             return 1;
         }
 
-        var pullRequest = referenceResult.Reference!;
-
-        if (!BitbucketCredentials.TryFromEnvironment(environment.GetVariable, pullRequest.Workspace, parseResult.Options.TokenEnvironmentSuffix, out var credentials, out var credentialError))
+        if (!BitbucketCredentials.TryFromEnvironment(environment.GetVariable, repository!.Workspace, parseResult.Options.TokenEnvironmentSuffix, out var credentials, out var credentialError))
         {
             await ErrorOutputWriter.WriteAsync(
                 new CliError(ErrorCodes.AuthenticationOrConfigurationError, credentialError!),
@@ -67,34 +60,60 @@ public static class CliApplication
             bitbucketClient,
             environment.GetVariable,
             baseUrl);
+        var pipelineBuildResolver = new BitbucketPullRequestPipelineBuildResolver(
+            bitbucketClient,
+            environment.GetVariable,
+            baseUrl);
         var pullRequestApplicationService = new PullRequestApplicationService(
             bitbucketClient,
-            sourceCommitResolver);
+            sourceCommitResolver,
+            pipelineBuildResolver);
 
         try
         {
             if (parseResult.Options.Command is PullRequestCommandKind.GetReports)
             {
-                var reports = await pullRequestApplicationService.GetReportsAsync(pullRequest, cancellationToken);
+                var reports = await pullRequestApplicationService.GetReportsAsync(pullRequest!, cancellationToken);
                 await ReportOutputWriter.WriteAsync(reports, parseResult.Options.OutputFormat, standardOutput);
                 return 0;
             }
 
             if (parseResult.Options.Command is PullRequestCommandKind.GetBranches)
             {
-                var branches = await pullRequestApplicationService.GetBranchesAsync(pullRequest, cancellationToken);
+                var branches = await pullRequestApplicationService.GetBranchesAsync(pullRequest!, cancellationToken);
                 await BranchOutputWriter.WriteAsync(branches, parseResult.Options.OutputFormat, standardOutput);
+                return 0;
+            }
+
+            if (parseResult.Options.Command is PullRequestCommandKind.GetPipelineLog)
+            {
+                PullRequestPipelineLog pipelineLog;
+
+                if (parseResult.Options.BuildNumber is int buildNumber)
+                {
+                    pipelineLog = await pullRequestApplicationService.GetPipelineLogByBuildNumberAsync(repository, buildNumber, cancellationToken);
+                }
+                else if (parseResult.Options.LatestCommitPipeline)
+                {
+                    pipelineLog = await pullRequestApplicationService.GetLatestPipelineLogAsync(pullRequest!, cancellationToken);
+                }
+                else
+                {
+                    pipelineLog = await pullRequestApplicationService.GetReferencedPipelineLogAsync(pullRequest!, cancellationToken);
+                }
+
+                await PipelineLogOutputWriter.WriteAsync(pipelineLog, parseResult.Options.OutputFormat, standardOutput);
                 return 0;
             }
 
             if (parseResult.Options.Command is PullRequestCommandKind.GetTasks)
             {
-                var tasks = await pullRequestApplicationService.GetTasksAsync(pullRequest, cancellationToken);
+                var tasks = await pullRequestApplicationService.GetTasksAsync(pullRequest!, cancellationToken);
                 await TaskOutputWriter.WriteAsync(tasks, parseResult.Options.OutputFormat, standardOutput);
                 return 0;
             }
 
-            var comments = await pullRequestApplicationService.GetCommentsAsync(pullRequest, cancellationToken);
+            var comments = await pullRequestApplicationService.GetCommentsAsync(pullRequest!, cancellationToken);
             await CommentOutputWriter.WriteAsync(comments, parseResult.Options.OutputFormat, standardOutput);
             return 0;
         }
@@ -140,6 +159,7 @@ public static class CliApplication
             PullRequestCommandKind.GetTasks => GetTasksHelpText,
             PullRequestCommandKind.GetReports => GetReportsHelpText,
             PullRequestCommandKind.GetBranches => GetBranchesHelpText,
+            PullRequestCommandKind.GetPipelineLog => GetPipelineLogHelpText,
             _ => GeneralHelpText
         };
     }
@@ -152,6 +172,7 @@ public static class CliApplication
           bb-get-pr-tasks      Le tasks de um pull request.
           bb-get-pr-reports    Le reports de Code Insights do commit de origem do pull request.
           bb-get-pr-branches   Le as branches de origem e destino de um pull request.
+          bb-get-pr-pipeline-log Le o log do pipeline referenciado no PR, do ultimo pipeline do commit ou de um build especifico.
 
         Formas equivalentes:
           atlascli bb-get-pr-comments ...
@@ -162,6 +183,7 @@ public static class CliApplication
           atlascli bb-get-pr-tasks --help
           atlascli bb-get-pr-reports --help
           atlascli bb-get-pr-branches --help
+          atlascli bb-get-pr-pipeline-log --help
 
         Opcoes comuns:
           --repo <workspace/repositorio>  Repositorio quando --pr recebe apenas o numero.
@@ -260,4 +282,92 @@ public static class CliApplication
           atlascli bb-get-pr-branches --pr "https://bitbucket.org/dynamoxteam/dotnet-apps-common-libs/pull-requests/682" --output json
         """;
 
+    private const string GetPipelineLogHelpText = """
+        bb-get-pr-pipeline-log
+
+        Le o log do pipeline referenciado no PR, do ultimo pipeline do commit de origem ou de um build especifico.
+
+        Uso:
+          atlascli bb-get-pr-pipeline-log --repo <workspace/repositorio> --pr <numero-do-pr> [--output table|json]
+          atlascli bb-get-pr-pipeline-log --pr <url-do-pr> [--output table|json]
+          atlascli bb-get-pr-pipeline-log --url <url-do-pr> [--output table|json]
+          atlascli bb-get-pr-pipeline-log --pr <url-do-pr> --latest-commit-pipeline [--output table|json]
+          atlascli bb-get-pr-pipeline-log --repo <workspace/repositorio> --build <numero-do-build> [--output table|json]
+
+        Opcoes:
+          --latest-commit-pipeline       Busca o ultimo pipeline do commit de origem. Padrao: usa o pipeline referenciado no PR.
+          --build <numero-do-build>      Busca um build especifico. Requer --repo ou um PR informado por --pr/--url.
+          --output <table|json>           Formato de saida. Padrao: table.
+
+        Variaveis:
+          BITBUCKET_<WORKSPACE>_EMAIL
+          BB_<WORKSPACE>_GET_PR_PIPELINE_LOG_TOKEN
+
+        Observacao:
+          Este comando precisa de acesso de leitura a pipelines.
+          Quando o token principal nao tiver read:pullrequest:bitbucket, o CLI pode reutilizar BB_<WORKSPACE>_GET_PR_COMMENTS_TOKEN para ler metadados do PR e descobrir o pipeline referenciado.
+
+        Exemplo:
+          atlascli bb-get-pr-pipeline-log --pr "https://bitbucket.org/dynamoxteam/dotnet-apps-common-libs/pull-requests/682" --output json
+        """;
+
+    private static bool TryResolveBitbucketContext(
+        PullRequestCommandOptions options,
+        out RepositoryReference? repository,
+        out PullRequestReference? pullRequest,
+        out CliError? error)
+    {
+        repository = null;
+        pullRequest = null;
+        error = null;
+
+        if (options.Command is PullRequestCommandKind.GetPipelineLog && options.BuildNumber is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(options.PullRequest) || !string.IsNullOrWhiteSpace(options.Url))
+            {
+                var pullRequestResult = PullRequestReferenceParser.Parse(new PullRequestReferenceInput(
+                    options.Repository,
+                    options.PullRequest,
+                    options.Url));
+
+                if (!pullRequestResult.IsSuccess)
+                {
+                    error = new CliError(ErrorCodes.ValidationError, pullRequestResult.ErrorMessage!);
+                    return false;
+                }
+
+                pullRequest = pullRequestResult.Reference!;
+                repository = pullRequest.ToRepositoryReference();
+                return true;
+            }
+
+            var repositoryResult = PullRequestReferenceParser.ParseRepository(options.Repository);
+            if (!repositoryResult.IsSuccess)
+            {
+                var message = string.IsNullOrWhiteSpace(options.Repository)
+                    ? "--build exige --repo <workspace/repositorio> ou um PR informado por --pr/--url."
+                    : repositoryResult.ErrorMessage!;
+                error = new CliError(ErrorCodes.ValidationError, message);
+                return false;
+            }
+
+            repository = repositoryResult.Reference!;
+            return true;
+        }
+
+        var referenceResult = PullRequestReferenceParser.Parse(new PullRequestReferenceInput(
+            options.Repository,
+            options.PullRequest,
+            options.Url));
+
+        if (!referenceResult.IsSuccess)
+        {
+            error = new CliError(ErrorCodes.ValidationError, referenceResult.ErrorMessage!);
+            return false;
+        }
+
+        pullRequest = referenceResult.Reference!;
+        repository = pullRequest.ToRepositoryReference();
+        return true;
+    }
 }

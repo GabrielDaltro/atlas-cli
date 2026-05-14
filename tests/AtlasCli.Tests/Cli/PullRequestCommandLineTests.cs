@@ -76,6 +76,63 @@ public sealed class PullRequestCommandLineTests
     }
 
     [Fact]
+    public void ShouldParsePipelineLogCommandWhenCommandIsGetPrPipelineLog()
+    {
+        var result = PullRequestCommandLine.Parse(
+            ["bb-get-pr-pipeline-log", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1"]);
+
+        Assert.False(result.IsHelp);
+        Assert.Null(result.Error);
+        Assert.Equal(PullRequestCommandKind.GetPipelineLog, result.Options!.Command);
+    }
+
+    [Fact]
+    public void ShouldParseLatestCommitPipelineWhenPipelineLogOptionIsProvided()
+    {
+        var result = PullRequestCommandLine.Parse(
+            ["bb-get-pr-pipeline-log", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1", "--latest-commit-pipeline"]);
+
+        Assert.False(result.IsHelp);
+        Assert.Null(result.Error);
+        Assert.True(result.Options!.LatestCommitPipeline);
+        Assert.Null(result.Options.BuildNumber);
+    }
+
+    [Fact]
+    public void ShouldParseBuildNumberWhenPipelineBuildIsProvided()
+    {
+        var result = PullRequestCommandLine.Parse(
+            ["bb-get-pr-pipeline-log", "--repo", "workspace/repo", "--build", "42"]);
+
+        Assert.False(result.IsHelp);
+        Assert.Null(result.Error);
+        Assert.Equal(42, result.Options!.BuildNumber);
+        Assert.False(result.Options.LatestCommitPipeline);
+    }
+
+    [Fact]
+    public void ShouldRejectPipelineStrategiesWhenBuildAndLatestCommitAreProvidedTogether()
+    {
+        var result = PullRequestCommandLine.Parse(
+            ["bb-get-pr-pipeline-log", "--repo", "workspace/repo", "--build", "42", "--latest-commit-pipeline"]);
+
+        Assert.False(result.IsHelp);
+        Assert.Equal(ErrorCodes.ValidationError, result.Error!.Code);
+        Assert.Equal("Informe apenas uma estrategia de pipeline: --latest-commit-pipeline ou --build.", result.Error.Message);
+    }
+
+    [Fact]
+    public void ShouldRejectPipelineOnlyOptionsWhenCommandIsNotPipelineLog()
+    {
+        var result = PullRequestCommandLine.Parse(
+            ["bb-get-pr-comments", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1", "--build", "42"]);
+
+        Assert.False(result.IsHelp);
+        Assert.Equal(ErrorCodes.ValidationError, result.Error!.Code);
+        Assert.Equal("--latest-commit-pipeline e --build sao suportados apenas por bb-get-pr-pipeline-log.", result.Error.Message);
+    }
+
+    [Fact]
     public void ShouldParseJsonOutputWhenOutputIsJson()
     {
         var result = PullRequestCommandLine.Parse(

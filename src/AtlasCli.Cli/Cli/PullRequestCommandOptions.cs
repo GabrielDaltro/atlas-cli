@@ -6,6 +6,8 @@ public sealed record PullRequestCommandOptions(
     string? PullRequest,
     string? Url,
     bool IncludeSystem,
+    bool LatestCommitPipeline,
+    int? BuildNumber,
     OutputFormat OutputFormat)
 {
     public string TokenEnvironmentSuffix => Command switch
@@ -14,6 +16,7 @@ public sealed record PullRequestCommandOptions(
         PullRequestCommandKind.GetTasks => "GET_PR_TASKS_TOKEN",
         PullRequestCommandKind.GetReports => "GET_PR_REPORTS_TOKEN",
         PullRequestCommandKind.GetBranches => "GET_PR_BRANCHES_TOKEN",
+        PullRequestCommandKind.GetPipelineLog => "GET_PR_PIPELINE_LOG_TOKEN",
         _ => throw new InvalidOperationException($"Comando {Command} nao possui token configurado.")
     };
 }

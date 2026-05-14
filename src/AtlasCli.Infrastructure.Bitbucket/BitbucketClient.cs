@@ -125,6 +125,215 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
             pullRequestDetails.Destination.Branch.Name);
     }
 
+    public async Task<int> GetReferencedPipelineBuildNumberAsync(
+        PullRequestReference pullRequest,
+        CancellationToken cancellationToken = default)
+    {
+        var nextUrl = BuildPullRequestStatusesUrl(pullRequest);
+        BitbucketPullRequestStatus? latestPipelineStatus = null;
+
+        while (!string.IsNullOrWhiteSpace(nextUrl))
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, nextUrl);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.Authorization = new AuthenticationHeaderValue(
+                "Basic",
+                _credentials.ToBasicAuthenticationParameter());
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var details = await response.Content.ReadAsStringAsync(cancellationToken);
+                throw new BitbucketApiException(
+                    response.StatusCode,
+                    BuildErrorMessage(pullRequest, "statuses do PR", response, details));
+            }
+
+            await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            var page = await JsonSerializer.DeserializeAsync<BitbucketPullRequestStatusesPage>(responseStream, JsonOptions, cancellationToken)
+                ?? new BitbucketPullRequestStatusesPage();
+
+            var pageLatestStatus = page.Values
+                .Where(status => TryExtractPipelineBuildNumber(status.Url, out _))
+                .OrderByDescending(status => status.UpdatedOn ?? status.CreatedOn ?? DateTimeOffset.MinValue)
+                .FirstOrDefault();
+
+            if (pageLatestStatus is not null
+                && (latestPipelineStatus is null
+                    || (pageLatestStatus.UpdatedOn ?? pageLatestStatus.CreatedOn ?? DateTimeOffset.MinValue)
+                    > (latestPipelineStatus.UpdatedOn ?? latestPipelineStatus.CreatedOn ?? DateTimeOffset.MinValue)))
+            {
+                latestPipelineStatus = pageLatestStatus;
+            }
+
+            nextUrl = page.Next;
+        }
+
+        if (latestPipelineStatus is null
+            || !TryExtractPipelineBuildNumber(latestPipelineStatus.Url, out var buildNumber))
+        {
+            throw new BitbucketApiException(
+                System.Net.HttpStatusCode.NotFound,
+                $"Bitbucket nao retornou um pipeline associado ao PR {pullRequest.Workspace}/{pullRequest.Repository}#{pullRequest.Number}.");
+        }
+
+        return buildNumber;
+    }
+
+    public async Task<PullRequestPipeline> GetLatestPipelineAsync(
+        RepositoryReference repository,
+        string commitHash,
+        CancellationToken cancellationToken = default)
+    {
+        var url = BuildPipelinesByCommitUrl(repository, commitHash);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Basic",
+            _credentials.ToBasicAuthenticationParameter());
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var details = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new BitbucketApiException(
+                response.StatusCode,
+                BuildErrorMessage(repository, "pipelines", response, details));
+        }
+
+        await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var page = await JsonSerializer.DeserializeAsync<BitbucketPipelinesPage>(responseStream, JsonOptions, cancellationToken)
+            ?? new BitbucketPipelinesPage();
+        var pipeline = page.Values.FirstOrDefault();
+
+        if (pipeline is null || string.IsNullOrWhiteSpace(pipeline.Uuid))
+        {
+            throw new BitbucketApiException(
+                System.Net.HttpStatusCode.NotFound,
+                $"Bitbucket nao retornou pipelines para o commit {commitHash} do repositorio {repository.Workspace}/{repository.Repository}.");
+        }
+
+        return new PullRequestPipeline(
+            pipeline.Uuid,
+            pipeline.BuildNumber,
+            ResolveStateName(pipeline.State),
+            pipeline.CreatedOn,
+            pipeline.CompletedOn);
+    }
+
+    public async Task<PullRequestPipeline> GetPipelineByBuildNumberAsync(
+        RepositoryReference repository,
+        int buildNumber,
+        CancellationToken cancellationToken = default)
+    {
+        var nextUrl = BuildPipelinesUrl(repository);
+
+        while (!string.IsNullOrWhiteSpace(nextUrl))
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, nextUrl);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.Authorization = new AuthenticationHeaderValue(
+                "Basic",
+                _credentials.ToBasicAuthenticationParameter());
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var details = await response.Content.ReadAsStringAsync(cancellationToken);
+                throw new BitbucketApiException(
+                    response.StatusCode,
+                    BuildErrorMessage(repository, "pipelines", response, details));
+            }
+
+            await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            var page = await JsonSerializer.DeserializeAsync<BitbucketPipelinesPage>(responseStream, JsonOptions, cancellationToken)
+                ?? new BitbucketPipelinesPage();
+
+            var pipeline = page.Values.FirstOrDefault(value => value.BuildNumber == buildNumber && !string.IsNullOrWhiteSpace(value.Uuid));
+            if (pipeline is not null)
+            {
+                return new PullRequestPipeline(
+                    pipeline.Uuid!,
+                    pipeline.BuildNumber,
+                    ResolveStateName(pipeline.State),
+                    pipeline.CreatedOn,
+                    pipeline.CompletedOn);
+            }
+
+            nextUrl = page.Next;
+        }
+
+        throw new BitbucketApiException(
+            System.Net.HttpStatusCode.NotFound,
+            $"Bitbucket nao retornou o build {buildNumber} do repositorio {repository.Workspace}/{repository.Repository}.");
+    }
+
+    public async Task<IReadOnlyList<PullRequestPipelineStep>> GetPipelineStepsAsync(
+        RepositoryReference repository,
+        string pipelineUuid,
+        CancellationToken cancellationToken = default)
+    {
+        var url = BuildPipelineStepsUrl(repository, pipelineUuid);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Basic",
+            _credentials.ToBasicAuthenticationParameter());
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var details = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new BitbucketApiException(
+                response.StatusCode,
+                BuildErrorMessage(repository, "steps do pipeline", response, details));
+        }
+
+        await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var page = await JsonSerializer.DeserializeAsync<BitbucketPipelineStepsPage>(responseStream, JsonOptions, cancellationToken)
+            ?? new BitbucketPipelineStepsPage();
+
+        return page.Values
+            .Where(step => !string.IsNullOrWhiteSpace(step.Uuid))
+            .Select(step => new PullRequestPipelineStep(
+                step.Uuid!,
+                FirstConfigured(step.Name, step.SetupCommands.FirstOrDefault()?.Name, step.ScriptCommands.FirstOrDefault()?.Name) ?? "step",
+                ResolveStateName(step.State)))
+            .ToArray();
+    }
+
+    public async Task<string> GetPipelineStepLogAsync(
+        RepositoryReference repository,
+        string pipelineUuid,
+        string stepUuid,
+        CancellationToken cancellationToken = default)
+    {
+        var url = BuildPipelineStepLogUrl(repository, pipelineUuid, stepUuid);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Basic",
+            _credentials.ToBasicAuthenticationParameter());
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            if (response.StatusCode is System.Net.HttpStatusCode.NotFound)
+            {
+                return string.Empty;
+            }
+
+            var details = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new BitbucketApiException(
+                response.StatusCode,
+                BuildErrorMessage(repository, "log do step do pipeline", response, details));
+        }
+
+        return await response.Content.ReadAsStringAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<PullRequestReport>> GetCommitReportsAsync(
         PullRequestReference pullRequest,
         string commitHash,
@@ -200,6 +409,50 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
         var workspace = Uri.EscapeDataString(pullRequest.Workspace);
         var repository = Uri.EscapeDataString(pullRequest.Repository);
         var relativeUrl = $"repositories/{workspace}/{repository}/pullrequests/{pullRequest.Number}/comments?pagelen=100";
+        return new Uri(_apiBaseUrl, relativeUrl).ToString();
+    }
+
+    private string BuildPullRequestStatusesUrl(PullRequestReference pullRequest)
+    {
+        var workspace = Uri.EscapeDataString(pullRequest.Workspace);
+        var repository = Uri.EscapeDataString(pullRequest.Repository);
+        var relativeUrl = $"repositories/{workspace}/{repository}/pullrequests/{pullRequest.Number}/statuses?pagelen=100";
+        return new Uri(_apiBaseUrl, relativeUrl).ToString();
+    }
+
+    private string BuildPipelinesByCommitUrl(RepositoryReference repository, string commitHash)
+    {
+        var workspace = Uri.EscapeDataString(repository.Workspace);
+        var repositoryName = Uri.EscapeDataString(repository.Repository);
+        var query = Uri.EscapeDataString($"target.commit.hash=\"{commitHash}\"");
+        var relativeUrl = $"repositories/{workspace}/{repositoryName}/pipelines/?sort=-created_on&q={query}";
+        return new Uri(_apiBaseUrl, relativeUrl).ToString();
+    }
+
+    private string BuildPipelinesUrl(RepositoryReference repository)
+    {
+        var workspace = Uri.EscapeDataString(repository.Workspace);
+        var repositoryName = Uri.EscapeDataString(repository.Repository);
+        var relativeUrl = $"repositories/{workspace}/{repositoryName}/pipelines/?sort=-created_on&pagelen=100";
+        return new Uri(_apiBaseUrl, relativeUrl).ToString();
+    }
+
+    private string BuildPipelineStepsUrl(RepositoryReference repository, string pipelineUuid)
+    {
+        var workspace = Uri.EscapeDataString(repository.Workspace);
+        var repositoryName = Uri.EscapeDataString(repository.Repository);
+        var pipeline = Uri.EscapeDataString(pipelineUuid);
+        var relativeUrl = $"repositories/{workspace}/{repositoryName}/pipelines/{pipeline}/steps";
+        return new Uri(_apiBaseUrl, relativeUrl).ToString();
+    }
+
+    private string BuildPipelineStepLogUrl(RepositoryReference repository, string pipelineUuid, string stepUuid)
+    {
+        var workspace = Uri.EscapeDataString(repository.Workspace);
+        var repositoryName = Uri.EscapeDataString(repository.Repository);
+        var pipeline = Uri.EscapeDataString(pipelineUuid);
+        var step = Uri.EscapeDataString(stepUuid);
+        var relativeUrl = $"repositories/{workspace}/{repositoryName}/pipelines/{pipeline}/steps/{step}/log";
         return new Uri(_apiBaseUrl, relativeUrl).ToString();
     }
 
@@ -287,6 +540,11 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
                 data.Value)).ToArray());
     }
 
+    private static string ResolveStateName(BitbucketPipelineState? state)
+    {
+        return FirstConfigured(state?.Result?.Name, state?.Name, state?.Type) ?? "unknown";
+    }
+
     private static string ResolveAuthor(BitbucketUser? user)
     {
         return FirstConfigured(user?.DisplayName, user?.Nickname, user?.AccountId, user?.Uuid) ?? "desconhecido";
@@ -312,6 +570,51 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
 
         var sanitizedDetails = details.ReplaceLineEndings(" ").Trim();
         return $"{message} {sanitizedDetails}";
+    }
+
+    private static string BuildErrorMessage(
+        RepositoryReference repository,
+        string resourceName,
+        HttpResponseMessage response,
+        string details)
+    {
+        var message = $"Bitbucket retornou {(int)response.StatusCode} {response.ReasonPhrase} ao ler {resourceName} do repositorio {repository.Workspace}/{repository.Repository}.";
+
+        if (string.IsNullOrWhiteSpace(details))
+        {
+            return message;
+        }
+
+        var sanitizedDetails = details.ReplaceLineEndings(" ").Trim();
+        return $"{message} {sanitizedDetails}";
+    }
+
+    private static bool TryExtractPipelineBuildNumber(string? url, out int buildNumber)
+    {
+        buildNumber = default;
+
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        var segments = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(Uri.UnescapeDataString)
+            .ToArray();
+
+        var resultsIndex = Array.FindIndex(
+            segments,
+            segment => string.Equals(segment, "results", StringComparison.OrdinalIgnoreCase));
+
+        if (resultsIndex < 1
+            || resultsIndex + 1 >= segments.Length
+            || !string.Equals(segments[resultsIndex - 1], "pipelines", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return int.TryParse(segments[resultsIndex + 1], out buildNumber) && buildNumber > 0;
     }
 
     private static Uri NormalizeApiBaseUrl(string? apiBaseUrl)
@@ -358,6 +661,30 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
         public IReadOnlyList<BitbucketReport> Values { get; init; } = [];
     }
 
+    private sealed class BitbucketPipelinesPage
+    {
+        [JsonPropertyName("next")]
+        public string? Next { get; init; }
+
+        [JsonPropertyName("values")]
+        public IReadOnlyList<BitbucketPipeline> Values { get; init; } = [];
+    }
+
+    private sealed class BitbucketPullRequestStatusesPage
+    {
+        [JsonPropertyName("next")]
+        public string? Next { get; init; }
+
+        [JsonPropertyName("values")]
+        public IReadOnlyList<BitbucketPullRequestStatus> Values { get; init; } = [];
+    }
+
+    private sealed class BitbucketPipelineStepsPage
+    {
+        [JsonPropertyName("values")]
+        public IReadOnlyList<BitbucketPipelineStep> Values { get; init; } = [];
+    }
+
     private sealed class BitbucketPullRequest
     {
         [JsonPropertyName("source")]
@@ -392,6 +719,78 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
     {
         [JsonPropertyName("hash")]
         public string? Hash { get; init; }
+    }
+
+    private sealed class BitbucketPipeline
+    {
+        [JsonPropertyName("uuid")]
+        public string? Uuid { get; init; }
+
+        [JsonPropertyName("build_number")]
+        public int? BuildNumber { get; init; }
+
+        [JsonPropertyName("created_on")]
+        public DateTimeOffset? CreatedOn { get; init; }
+
+        [JsonPropertyName("completed_on")]
+        public DateTimeOffset? CompletedOn { get; init; }
+
+        [JsonPropertyName("state")]
+        public BitbucketPipelineState? State { get; init; }
+    }
+
+    private sealed class BitbucketPipelineStep
+    {
+        [JsonPropertyName("uuid")]
+        public string? Uuid { get; init; }
+
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
+
+        [JsonPropertyName("state")]
+        public BitbucketPipelineState? State { get; init; }
+
+        [JsonPropertyName("setup_commands")]
+        public IReadOnlyList<BitbucketPipelineCommand> SetupCommands { get; init; } = [];
+
+        [JsonPropertyName("script_commands")]
+        public IReadOnlyList<BitbucketPipelineCommand> ScriptCommands { get; init; } = [];
+    }
+
+    private sealed class BitbucketPipelineCommand
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
+    }
+
+    private sealed class BitbucketPipelineState
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
+
+        [JsonPropertyName("type")]
+        public string? Type { get; init; }
+
+        [JsonPropertyName("result")]
+        public BitbucketPipelineStateResult? Result { get; init; }
+    }
+
+    private sealed class BitbucketPipelineStateResult
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; init; }
+    }
+
+    private sealed class BitbucketPullRequestStatus
+    {
+        [JsonPropertyName("url")]
+        public string? Url { get; init; }
+
+        [JsonPropertyName("created_on")]
+        public DateTimeOffset? CreatedOn { get; init; }
+
+        [JsonPropertyName("updated_on")]
+        public DateTimeOffset? UpdatedOn { get; init; }
     }
 
     private sealed class BitbucketComment

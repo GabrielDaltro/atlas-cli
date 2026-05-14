@@ -35,6 +35,8 @@ public static class PullRequestCommandLine
         string? pullRequest = null;
         string? url = null;
         var includeSystem = false;
+        var latestCommitPipeline = false;
+        int? buildNumber = null;
         var outputFormat = OutputFormat.Table;
 
         for (var i = index; i < args.Length; i++)
@@ -76,6 +78,24 @@ public static class PullRequestCommandLine
                     includeSystem = true;
                     break;
 
+                case "--latest-commit-pipeline":
+                    latestCommitPipeline = true;
+                    break;
+
+                case "--build":
+                    if (!TryReadValue(args, ref i, arg, outputFormat, out var buildValue, out var buildError))
+                    {
+                        return buildError;
+                    }
+
+                    if (!int.TryParse(buildValue, out var parsedBuildNumber) || parsedBuildNumber <= 0)
+                    {
+                        return Failure("--build deve ser um numero positivo.", outputFormat);
+                    }
+
+                    buildNumber = parsedBuildNumber;
+                    break;
+
                 case "--output":
                     if (!TryReadValue(args, ref i, arg, outputFormat, out var output, out var outputError))
                     {
@@ -94,10 +114,31 @@ public static class PullRequestCommandLine
             }
         }
 
+        var resolvedCommand = command ?? PullRequestCommandKind.GetComments;
+
+        if (resolvedCommand is not PullRequestCommandKind.GetPipelineLog
+            && (latestCommitPipeline || buildNumber is not null))
+        {
+            return Failure("--latest-commit-pipeline e --build sao suportados apenas por bb-get-pr-pipeline-log.", outputFormat);
+        }
+
+        if (latestCommitPipeline && buildNumber is not null)
+        {
+            return Failure("Informe apenas uma estrategia de pipeline: --latest-commit-pipeline ou --build.", outputFormat);
+        }
+
         return new CommandLineParseResult(
             IsHelp: false,
             HelpCommand: null,
-            Options: new PullRequestCommandOptions(command ?? PullRequestCommandKind.GetComments, repository, pullRequest, url, includeSystem, outputFormat),
+            Options: new PullRequestCommandOptions(
+                resolvedCommand,
+                repository,
+                pullRequest,
+                url,
+                includeSystem,
+                latestCommitPipeline,
+                buildNumber,
+                outputFormat),
             Error: null,
             OutputFormat: outputFormat);
     }
@@ -135,6 +176,13 @@ public static class PullRequestCommandLine
             return true;
         }
 
+        if (IsCommand(args[0], "bb-get-pr-pipeline-log"))
+        {
+            command = PullRequestCommandKind.GetPipelineLog;
+            nextIndex = 1;
+            return true;
+        }
+
         if (args.Length < 2 || !IsCommand(args[0], "bb"))
         {
             return false;
@@ -164,6 +212,13 @@ public static class PullRequestCommandLine
         if (IsCommand(args[1], "get-pr-branches"))
         {
             command = PullRequestCommandKind.GetBranches;
+            nextIndex = 2;
+            return true;
+        }
+
+        if (IsCommand(args[1], "get-pr-pipeline-log"))
+        {
+            command = PullRequestCommandKind.GetPipelineLog;
             nextIndex = 2;
             return true;
         }

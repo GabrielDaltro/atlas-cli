@@ -91,6 +91,27 @@ public sealed class BitbucketCredentialsTests
     }
 
     [Fact]
+    public void ShouldLoadPipelineLogTokenWhenPipelineLogTokenSuffixIsRequested()
+    {
+        var environment = new DictionaryEnvironment(new Dictionary<string, string>
+        {
+            ["BITBUCKET_DYNAMOXTEAM_EMAIL"] = "developer@example.com",
+            ["BB_DYNAMOXTEAM_GET_PR_PIPELINE_LOG_TOKEN"] = "pipeline-log-token"
+        });
+
+        var loaded = BitbucketCredentials.TryFromEnvironment(
+            environment.GetVariable,
+            "dynamoxteam",
+            "GET_PR_PIPELINE_LOG_TOKEN",
+            out var credentials,
+            out var error);
+
+        Assert.True(loaded);
+        Assert.Null(error);
+        Assert.Equal("pipeline-log-token", credentials!.Token);
+    }
+
+    [Fact]
     public void ShouldConvertHyphenatedWorkspaceToEnvironmentKeyWhenWorkspaceHasHyphen()
     {
         var key = BitbucketCredentials.ToEnvironmentKey("my-team");
