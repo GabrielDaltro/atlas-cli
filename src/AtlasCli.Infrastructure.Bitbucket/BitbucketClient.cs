@@ -370,6 +370,43 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
         return reports;
     }
 
+    public async Task<IReadOnlyList<PullRequestReportAnnotation>> GetCommitReportAnnotationsAsync(
+        PullRequestReference pullRequest,
+        string commitHash,
+        string reportId,
+        CancellationToken cancellationToken = default)
+    {
+        var annotations = new List<PullRequestReportAnnotation>();
+        var nextUrl = BuildReportAnnotationsUrl(pullRequest, commitHash, reportId);
+
+        while (!string.IsNullOrWhiteSpace(nextUrl))
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, nextUrl);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.Authorization = new AuthenticationHeaderValue(
+                "Basic",
+                _credentials.ToBasicAuthenticationParameter());
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var details = await response.Content.ReadAsStringAsync(cancellationToken);
+                throw new BitbucketApiException(
+                    response.StatusCode,
+                    BuildErrorMessage(pullRequest, "annotations do report", response, details));
+            }
+
+            await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            var page = await JsonSerializer.DeserializeAsync<BitbucketReportAnnotationsPage>(responseStream, JsonOptions, cancellationToken)
+                ?? new BitbucketReportAnnotationsPage();
+
+            annotations.AddRange(page.Values.Select(annotation => MapReportAnnotation(annotation, reportId)));
+            nextUrl = page.Next;
+        }
+
+        return annotations;
+    }
+
     private string BuildPullRequestUrl(PullRequestReference pullRequest)
     {
         var workspace = Uri.EscapeDataString(pullRequest.Workspace);
@@ -473,6 +510,16 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
         return new Uri(_apiBaseUrl, relativeUrl).ToString();
     }
 
+    private string BuildReportAnnotationsUrl(PullRequestReference pullRequest, string commitHash, string reportId)
+    {
+        var workspace = Uri.EscapeDataString(pullRequest.Workspace);
+        var repository = Uri.EscapeDataString(pullRequest.Repository);
+        var commit = Uri.EscapeDataString(commitHash);
+        var report = Uri.EscapeDataString(reportId);
+        var relativeUrl = $"repositories/{workspace}/{repository}/commit/{commit}/reports/{report}/annotations?pagelen=100";
+        return new Uri(_apiBaseUrl, relativeUrl).ToString();
+    }
+
     private static PullRequestComment MapComment(BitbucketComment comment)
     {
         var inlineLine = comment.Inline?.To
@@ -538,6 +585,23 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
                 data.Title ?? string.Empty,
                 data.Type ?? string.Empty,
                 data.Value)).ToArray());
+    }
+
+    private static PullRequestReportAnnotation MapReportAnnotation(BitbucketReportAnnotation annotation, string reportId)
+    {
+        return new PullRequestReportAnnotation(
+            annotation.Uuid ?? string.Empty,
+            annotation.ExternalId ?? string.Empty,
+            annotation.Report?.Uuid ?? reportId,
+            annotation.Report?.Title ?? string.Empty,
+            annotation.AnnotationType ?? string.Empty,
+            annotation.Severity ?? string.Empty,
+            annotation.Path ?? string.Empty,
+            annotation.Line,
+            annotation.Summary ?? string.Empty,
+            annotation.Link,
+            annotation.CreatedOn,
+            annotation.UpdatedOn);
     }
 
     private static string ResolveStateName(BitbucketPipelineState? state)
@@ -659,6 +723,15 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
 
         [JsonPropertyName("values")]
         public IReadOnlyList<BitbucketReport> Values { get; init; } = [];
+    }
+
+    private sealed class BitbucketReportAnnotationsPage
+    {
+        [JsonPropertyName("next")]
+        public string? Next { get; init; }
+
+        [JsonPropertyName("values")]
+        public IReadOnlyList<BitbucketReportAnnotation> Values { get; init; } = [];
     }
 
     private sealed class BitbucketPipelinesPage
@@ -959,6 +1032,42 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
 
         [JsonPropertyName("data")]
         public IReadOnlyList<BitbucketReportData> Data { get; init; } = [];
+    }
+
+    private sealed class BitbucketReportAnnotation
+    {
+        [JsonPropertyName("uuid")]
+        public string? Uuid { get; init; }
+
+        [JsonPropertyName("external_id")]
+        public string? ExternalId { get; init; }
+
+        [JsonPropertyName("report")]
+        public BitbucketReport? Report { get; init; }
+
+        [JsonPropertyName("annotation_type")]
+        public string? AnnotationType { get; init; }
+
+        [JsonPropertyName("path")]
+        public string? Path { get; init; }
+
+        [JsonPropertyName("line")]
+        public int? Line { get; init; }
+
+        [JsonPropertyName("summary")]
+        public string? Summary { get; init; }
+
+        [JsonPropertyName("severity")]
+        public string? Severity { get; init; }
+
+        [JsonPropertyName("link")]
+        public string? Link { get; init; }
+
+        [JsonPropertyName("created_on")]
+        public string? CreatedOn { get; init; }
+
+        [JsonPropertyName("updated_on")]
+        public string? UpdatedOn { get; init; }
     }
 
     private sealed class BitbucketReportData

@@ -239,6 +239,463 @@ public sealed class CliApplicationTests
     }
 
     [Fact]
+    public async Task ShouldReturnUncoveredLinesJsonEnvelopeWhenSonarReturnsNewUncoveredLines()
+    {
+        var environment = new DictionaryEnvironment(new Dictionary<string, string>
+        {
+            ["BITBUCKET_WORKSPACE_EMAIL"] = "developer@example.com",
+            ["BB_WORKSPACE_GET_PR_REPORTS_TOKEN"] = "token",
+            ["SONAR_TOKEN"] = "sonar-token"
+        });
+        using var standardOutput = new StringWriter();
+        using var standardError = new StringWriter();
+        using var httpHandler = new QueueHttpMessageHandler(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "source": {
+                        "commit": {
+                          "hash": "abc123"
+                        }
+                      }
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "values": [
+                        {
+                          "uuid": "{report-id}",
+                          "title": "SonarQube Cloud Code Analysis",
+                          "reporter": "SonarCloud",
+                          "link": "https://sonarcloud.io/dashboard?id=project&pullRequest=1"
+                        }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "paging": {
+                        "pageIndex": 1,
+                        "pageSize": 500,
+                        "total": 1
+                      },
+                      "components": [
+                        {
+                          "key": "project:src/Foo.cs",
+                          "name": "Foo.cs",
+                          "path": "src/Foo.cs",
+                          "measures": [
+                            {
+                              "metric": "new_uncovered_lines",
+                              "periods": [
+                                {
+                                  "index": 1,
+                                  "value": "1"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "sources": [
+                        {
+                          "line": 41,
+                          "code": "service.Prepare(command);",
+                          "lineHits": 1,
+                          "isNew": true
+                        },
+                        {
+                          "line": 42,
+                          "code": "\u003cspan class=\"k\"\u003ereturn\u003c/span\u003e service.Execute(command);",
+                          "lineHits": 0,
+                          "isNew": true
+                        },
+                        {
+                          "line": 43,
+                          "code": "return service.Execute(otherCommand);",
+                          "lineHits": 0,
+                          "isNew": false
+                        }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            });
+
+        var exitCode = await CliApplication.RunAsync(
+            ["bb-get-pr-uncovered-lines", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1", "--output", "json"],
+            environment,
+            standardOutput,
+            standardError,
+            httpHandler);
+
+        using var json = JsonDocument.Parse(standardOutput.ToString());
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, standardError.ToString());
+        Assert.True(json.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal(1, json.RootElement.GetProperty("count").GetInt32());
+        Assert.Equal("src/Foo.cs", json.RootElement.GetProperty("data")[0].GetProperty("file").GetString());
+        Assert.Equal(42, json.RootElement.GetProperty("data")[0].GetProperty("line").GetInt32());
+        Assert.Equal("uncovered", json.RootElement.GetProperty("data")[0].GetProperty("status").GetString());
+        Assert.Equal("return service.Execute(command);", json.RootElement.GetProperty("data")[0].GetProperty("code").GetString());
+        Assert.Contains("api/measures/component_tree", httpHandler.Requests[2].RequestUri!.ToString());
+        Assert.Contains("api/sources/lines", httpHandler.Requests[3].RequestUri!.ToString());
+        Assert.Equal("Bearer", httpHandler.Requests[2].Headers.Authorization!.Scheme);
+        Assert.Equal("sonar-token", httpHandler.Requests[2].Headers.Authorization!.Parameter);
+    }
+
+    [Fact]
+    public async Task ShouldReturnSonarIssuesJsonEnvelopeWhenSonarReturnsPullRequestIssues()
+    {
+        var environment = new DictionaryEnvironment(new Dictionary<string, string>
+        {
+            ["BITBUCKET_WORKSPACE_EMAIL"] = "developer@example.com",
+            ["BB_WORKSPACE_GET_PR_REPORTS_TOKEN"] = "token"
+        });
+        using var standardOutput = new StringWriter();
+        using var standardError = new StringWriter();
+        using var httpHandler = new QueueHttpMessageHandler(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "source": {
+                        "commit": {
+                          "hash": "abc123"
+                        }
+                      }
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "values": [
+                        {
+                          "uuid": "{report-id}",
+                          "title": "SonarQube Cloud Code Analysis",
+                          "reporter": "SonarCloud",
+                          "link": "https://sonarcloud.io/dashboard?id=project&pullRequest=1"
+                        }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "values": [
+                        {
+                          "external_id": "issue-key",
+                          "uuid": "{annotation-id}",
+                          "report": {
+                            "uuid": "{report-id}",
+                            "title": "SonarQube Cloud Code Analysis"
+                          },
+                          "annotation_type": "CODE_SMELL",
+                          "path": "src/Foo.cs",
+                          "line": 12,
+                          "summary": "Add a private constructor to hide the implicit public one.",
+                          "severity": "MEDIUM",
+                          "link": "https://sonarcloud.io/project/issues?id=project&issues=issue-key&open=issue-key&pullRequest=1",
+                          "created_on": "2026-06-09T02:04:15.823123230Z",
+                          "updated_on": "2026-06-09T02:04:15.823123230Z"
+                        }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            });
+
+        var exitCode = await CliApplication.RunAsync(
+            ["bb-get-pr-sonar-issues", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1", "--output", "json"],
+            environment,
+            standardOutput,
+            standardError,
+            httpHandler);
+
+        using var json = JsonDocument.Parse(standardOutput.ToString());
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, standardError.ToString());
+        Assert.True(json.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal(1, json.RootElement.GetProperty("count").GetInt32());
+        Assert.Equal("{annotation-id}", json.RootElement.GetProperty("data")[0].GetProperty("annotationId").GetString());
+        Assert.Equal("issue-key", json.RootElement.GetProperty("data")[0].GetProperty("key").GetString());
+        Assert.Equal("src/Foo.cs", json.RootElement.GetProperty("data")[0].GetProperty("file").GetString());
+        Assert.Equal(12, json.RootElement.GetProperty("data")[0].GetProperty("line").GetInt32());
+        Assert.Equal("MEDIUM", json.RootElement.GetProperty("data")[0].GetProperty("severity").GetString());
+        Assert.Equal("CODE_SMELL", json.RootElement.GetProperty("data")[0].GetProperty("type").GetString());
+        Assert.Equal("Add a private constructor to hide the implicit public one.", json.RootElement.GetProperty("data")[0].GetProperty("message").GetString());
+        Assert.Equal("{report-id}", json.RootElement.GetProperty("data")[0].GetProperty("reportId").GetString());
+        Assert.Contains("/reports/", httpHandler.Requests[2].RequestUri!.ToString());
+        Assert.Contains("/annotations", httpHandler.Requests[2].RequestUri!.ToString());
+        Assert.Equal("Basic", httpHandler.Requests[2].Headers.Authorization!.Scheme);
+    }
+
+    [Fact]
+    public async Task ShouldReturnEmptyJsonEnvelopeWhenSonarReportHasNoUncoveredLines()
+    {
+        var environment = new DictionaryEnvironment(new Dictionary<string, string>
+        {
+            ["BITBUCKET_WORKSPACE_EMAIL"] = "developer@example.com",
+            ["BB_WORKSPACE_GET_PR_REPORTS_TOKEN"] = "token",
+            ["SONAR_TOKEN"] = "sonar-token"
+        });
+        using var standardOutput = new StringWriter();
+        using var standardError = new StringWriter();
+        using var httpHandler = new QueueHttpMessageHandler(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "source": {
+                        "commit": {
+                          "hash": "abc123"
+                        }
+                      }
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "values": [
+                        {
+                          "uuid": "{report-id}",
+                          "title": "SonarQube Cloud Code Analysis",
+                          "reporter": "SonarCloud",
+                          "link": "https://sonarcloud.io/dashboard?id=project&pullRequest=1"
+                        }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "paging": {
+                        "pageIndex": 1,
+                        "pageSize": 500,
+                        "total": 1
+                      },
+                      "components": [
+                        {
+                          "key": "project:src/Foo.cs",
+                          "name": "Foo.cs",
+                          "path": "src/Foo.cs",
+                          "measures": [
+                            {
+                              "metric": "new_uncovered_lines",
+                              "periods": [
+                                {
+                                  "index": 1,
+                                  "value": "0"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            });
+
+        var exitCode = await CliApplication.RunAsync(
+            ["bb-get-pr-uncovered-lines", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1", "--output", "json"],
+            environment,
+            standardOutput,
+            standardError,
+            httpHandler);
+
+        using var json = JsonDocument.Parse(standardOutput.ToString());
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, standardError.ToString());
+        Assert.True(json.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal(0, json.RootElement.GetProperty("count").GetInt32());
+        Assert.Equal(3, httpHandler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task ShouldReturnConfigurationErrorWhenSonarReportLinkIsMissing()
+    {
+        var environment = new DictionaryEnvironment(new Dictionary<string, string>
+        {
+            ["BITBUCKET_WORKSPACE_EMAIL"] = "developer@example.com",
+            ["BB_WORKSPACE_GET_PR_REPORTS_TOKEN"] = "token",
+            ["SONAR_TOKEN"] = "sonar-token"
+        });
+        using var standardOutput = new StringWriter();
+        using var standardError = new StringWriter();
+        using var httpHandler = new QueueHttpMessageHandler(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "source": {
+                        "commit": {
+                          "hash": "abc123"
+                        }
+                      }
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "values": [
+                        {
+                          "uuid": "{report-id}",
+                          "title": "SonarQube Cloud Code Analysis",
+                          "reporter": "SonarCloud"
+                        }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            });
+
+        var exitCode = await CliApplication.RunAsync(
+            ["bb-get-pr-uncovered-lines", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1", "--output", "json"],
+            environment,
+            standardOutput,
+            standardError,
+            httpHandler);
+
+        using var json = JsonDocument.Parse(standardError.ToString());
+        Assert.Equal(2, exitCode);
+        Assert.Equal(string.Empty, standardOutput.ToString());
+        Assert.False(json.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal(ErrorCodes.AuthenticationOrConfigurationError, json.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task ShouldReturnAuthenticationErrorWhenSonarTokenIsRejected()
+    {
+        var environment = new DictionaryEnvironment(new Dictionary<string, string>
+        {
+            ["BITBUCKET_WORKSPACE_EMAIL"] = "developer@example.com",
+            ["BB_WORKSPACE_GET_PR_REPORTS_TOKEN"] = "token",
+            ["SONAR_TOKEN"] = "invalid-sonar-token"
+        });
+        using var standardOutput = new StringWriter();
+        using var standardError = new StringWriter();
+        using var httpHandler = new QueueHttpMessageHandler(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "source": {
+                        "commit": {
+                          "hash": "abc123"
+                        }
+                      }
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "values": [
+                        {
+                          "uuid": "{report-id}",
+                          "title": "SonarQube Cloud Code Analysis",
+                          "reporter": "SonarCloud",
+                          "link": "https://sonarcloud.io/dashboard?id=project&pullRequest=1"
+                        }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            },
+            new HttpResponseMessage(HttpStatusCode.Unauthorized)
+            {
+                Content = new StringContent(
+                    """
+                    {
+                      "errors": [
+                        {
+                          "msg": "Insufficient privileges"
+                        }
+                      ]
+                    }
+                    """,
+                    Encoding.UTF8,
+                    "application/json")
+            });
+
+        var exitCode = await CliApplication.RunAsync(
+            ["bb-get-pr-uncovered-lines", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1", "--output", "json"],
+            environment,
+            standardOutput,
+            standardError,
+            httpHandler);
+
+        using var json = JsonDocument.Parse(standardError.ToString());
+        Assert.Equal(2, exitCode);
+        Assert.Equal(string.Empty, standardOutput.ToString());
+        Assert.False(json.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal(ErrorCodes.AuthenticationOrConfigurationError, json.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task ShouldReturnBranchesJsonEnvelopeWhenCommandIsGetPrBranches()
     {
         var environment = new DictionaryEnvironment(new Dictionary<string, string>

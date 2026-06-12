@@ -65,6 +65,28 @@ public sealed class PullRequestCommandLineTests
     }
 
     [Fact]
+    public void ShouldParseUncoveredLinesCommandWhenCommandIsProvided()
+    {
+        var result = PullRequestCommandLine.Parse(
+            ["bb-get-pr-uncovered-lines", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1"]);
+
+        Assert.False(result.IsHelp);
+        Assert.Null(result.Error);
+        Assert.Equal(PullRequestCommandKind.GetUncoveredLines, result.Options!.Command);
+    }
+
+    [Fact]
+    public void ShouldParseSonarIssuesCommandWhenCommandIsProvided()
+    {
+        var result = PullRequestCommandLine.Parse(
+            ["bb-get-pr-sonar-issues", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1"]);
+
+        Assert.False(result.IsHelp);
+        Assert.Null(result.Error);
+        Assert.Equal(PullRequestCommandKind.GetSonarIssues, result.Options!.Command);
+    }
+
+    [Fact]
     public void ShouldParseBranchesCommandWhenCommandIsGetPrBranches()
     {
         var result = PullRequestCommandLine.Parse(

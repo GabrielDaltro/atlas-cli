@@ -169,6 +169,20 @@ public static class PullRequestCommandLine
             return true;
         }
 
+        if (IsCommand(args[0], "bb-get-pr-uncovered-lines"))
+        {
+            command = PullRequestCommandKind.GetUncoveredLines;
+            nextIndex = 1;
+            return true;
+        }
+
+        if (IsCommand(args[0], "bb-get-pr-sonar-issues"))
+        {
+            command = PullRequestCommandKind.GetSonarIssues;
+            nextIndex = 1;
+            return true;
+        }
+
         if (IsCommand(args[0], "bb-get-pr-branches"))
         {
             command = PullRequestCommandKind.GetBranches;
@@ -205,6 +219,20 @@ public static class PullRequestCommandLine
         if (IsCommand(args[1], "get-pr-reports"))
         {
             command = PullRequestCommandKind.GetReports;
+            nextIndex = 2;
+            return true;
+        }
+
+        if (IsCommand(args[1], "get-pr-uncovered-lines"))
+        {
+            command = PullRequestCommandKind.GetUncoveredLines;
+            nextIndex = 2;
+            return true;
+        }
+
+        if (IsCommand(args[1], "get-pr-sonar-issues"))
+        {
+            command = PullRequestCommandKind.GetSonarIssues;
             nextIndex = 2;
             return true;
         }

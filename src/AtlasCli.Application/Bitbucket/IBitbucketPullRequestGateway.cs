@@ -47,4 +47,10 @@ public interface IBitbucketPullRequestGateway
         PullRequestReference pullRequest,
         string commitHash,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<PullRequestReportAnnotation>> GetCommitReportAnnotationsAsync(
+        PullRequestReference pullRequest,
+        string commitHash,
+        string reportId,
+        CancellationToken cancellationToken = default);
 }

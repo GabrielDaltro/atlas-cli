@@ -1,5 +1,7 @@
 using AtlasCli.Application.Bitbucket;
+using AtlasCli.Application.Sonar;
 using AtlasCli.Infrastructure.Bitbucket;
+using AtlasCli.Infrastructure.Sonar;
 using AtlasCli.Cli.Output;
 
 namespace AtlasCli.Cli;
@@ -64,10 +66,12 @@ public static class CliApplication
             bitbucketClient,
             environment.GetVariable,
             baseUrl);
+        var sonarClient = new SonarClient(httpClient, environment.GetVariable("SONAR_TOKEN"));
         var pullRequestApplicationService = new PullRequestApplicationService(
             bitbucketClient,
             sourceCommitResolver,
-            pipelineBuildResolver);
+            pipelineBuildResolver,
+            sonarClient);
 
         try
         {
@@ -75,6 +79,20 @@ public static class CliApplication
             {
                 var reports = await pullRequestApplicationService.GetReportsAsync(pullRequest!, cancellationToken);
                 await ReportOutputWriter.WriteAsync(reports, parseResult.Options.OutputFormat, standardOutput);
+                return 0;
+            }
+
+            if (parseResult.Options.Command is PullRequestCommandKind.GetUncoveredLines)
+            {
+                var uncoveredLines = await pullRequestApplicationService.GetUncoveredLinesAsync(pullRequest!, cancellationToken);
+                await UncoveredLineOutputWriter.WriteAsync(uncoveredLines, parseResult.Options.OutputFormat, standardOutput);
+                return 0;
+            }
+
+            if (parseResult.Options.Command is PullRequestCommandKind.GetSonarIssues)
+            {
+                var issues = await pullRequestApplicationService.GetSonarIssuesAsync(pullRequest!, cancellationToken);
+                await SonarIssueOutputWriter.WriteAsync(issues, parseResult.Options.OutputFormat, standardOutput);
                 return 0;
             }
 
@@ -141,6 +159,38 @@ public static class CliApplication
                 standardError);
             return 5;
         }
+        catch (SonarConfigurationException exception)
+        {
+            await ErrorOutputWriter.WriteAsync(
+                new CliError(ErrorCodes.AuthenticationOrConfigurationError, exception.Message),
+                parseResult.Options.OutputFormat,
+                standardError);
+            return 2;
+        }
+        catch (SonarApiException exception) when (exception.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+        {
+            await ErrorOutputWriter.WriteAsync(
+                new CliError(ErrorCodes.AuthenticationOrConfigurationError, exception.Message),
+                parseResult.Options.OutputFormat,
+                standardError);
+            return 2;
+        }
+        catch (SonarApiException exception) when (exception.StatusCode is System.Net.HttpStatusCode.NotFound)
+        {
+            await ErrorOutputWriter.WriteAsync(
+                new CliError(ErrorCodes.ResourceNotFound, exception.Message),
+                parseResult.Options.OutputFormat,
+                standardError);
+            return 3;
+        }
+        catch (SonarApiException exception)
+        {
+            await ErrorOutputWriter.WriteAsync(
+                new CliError(ErrorCodes.SonarApiError, exception.Message),
+                parseResult.Options.OutputFormat,
+                standardError);
+            return 5;
+        }
         catch (Exception exception)
         {
             await ErrorOutputWriter.WriteAsync(
@@ -158,6 +208,8 @@ public static class CliApplication
             PullRequestCommandKind.GetComments => GetCommentsHelpText,
             PullRequestCommandKind.GetTasks => GetTasksHelpText,
             PullRequestCommandKind.GetReports => GetReportsHelpText,
+            PullRequestCommandKind.GetUncoveredLines => GetUncoveredLinesHelpText,
+            PullRequestCommandKind.GetSonarIssues => GetSonarIssuesHelpText,
             PullRequestCommandKind.GetBranches => GetBranchesHelpText,
             PullRequestCommandKind.GetPipelineLog => GetPipelineLogHelpText,
             _ => GeneralHelpText
@@ -171,6 +223,8 @@ public static class CliApplication
           bb-get-pr-comments   Le comentarios de um pull request.
           bb-get-pr-tasks      Le tasks de um pull request.
           bb-get-pr-reports    Le reports de Code Insights do commit de origem do pull request.
+          bb-get-pr-uncovered-lines Le linhas novas sem cobertura de testes reportadas pelo Sonar.
+          bb-get-pr-sonar-issues Le issues abertas do Sonar para um pull request.
           bb-get-pr-branches   Le as branches de origem e destino de um pull request.
           bb-get-pr-pipeline-log Le o log do pipeline referenciado no PR, do ultimo pipeline do commit ou de um build especifico.
 
@@ -182,6 +236,8 @@ public static class CliApplication
           atlascli bb-get-pr-comments --help
           atlascli bb-get-pr-tasks --help
           atlascli bb-get-pr-reports --help
+          atlascli bb-get-pr-uncovered-lines --help
+          atlascli bb-get-pr-sonar-issues --help
           atlascli bb-get-pr-branches --help
           atlascli bb-get-pr-pipeline-log --help
 
@@ -259,6 +315,55 @@ public static class CliApplication
 
         Exemplo:
           atlascli bb-get-pr-reports --pr "https://bitbucket.org/dynamoxteam/dotnet-apps-common-libs/pull-requests/682" --output json
+        """;
+
+    private const string GetUncoveredLinesHelpText = """
+        bb-get-pr-uncovered-lines
+
+        Le as linhas novas sem cobertura de testes reportadas pelo Sonar para um pull request.
+
+        Uso:
+          atlascli bb-get-pr-uncovered-lines --repo <workspace/repositorio> --pr <numero-do-pr> [--output table|json]
+          atlascli bb-get-pr-uncovered-lines --pr <url-do-pr> [--output table|json]
+          atlascli bb-get-pr-uncovered-lines --url <url-do-pr> [--output table|json]
+
+        Opcoes:
+          --output <table|json>           Formato de saida. Padrao: table.
+
+        Variaveis:
+          BITBUCKET_<WORKSPACE>_EMAIL
+          BB_<WORKSPACE>_GET_PR_REPORTS_TOKEN
+          SONAR_TOKEN
+
+        Observacao:
+          Este comando usa o report de Code Insights do Bitbucket para descobrir o link do Sonar e depois consulta o Sonar linha a linha.
+
+        Exemplo:
+          atlascli bb-get-pr-uncovered-lines --pr "https://bitbucket.org/dynamoxteam/dotnet-apps-common-libs/pull-requests/682" --output json
+        """;
+
+    private const string GetSonarIssuesHelpText = """
+        bb-get-pr-sonar-issues
+
+        Le as issues abertas do Sonar para um pull request.
+
+        Uso:
+          atlascli bb-get-pr-sonar-issues --repo <workspace/repositorio> --pr <numero-do-pr> [--output table|json]
+          atlascli bb-get-pr-sonar-issues --pr <url-do-pr> [--output table|json]
+          atlascli bb-get-pr-sonar-issues --url <url-do-pr> [--output table|json]
+
+        Opcoes:
+          --output <table|json>           Formato de saida. Padrao: table.
+
+        Variaveis:
+          BITBUCKET_<WORKSPACE>_EMAIL
+          BB_<WORKSPACE>_GET_PR_REPORTS_TOKEN
+
+        Observacao:
+          Este comando usa as annotations do report de Code Insights do Bitbucket criado pelo Sonar.
+
+        Exemplo:
+          atlascli bb-get-pr-sonar-issues --pr "https://bitbucket.org/dynamoxteam/dotnet-apps-common-libs/pull-requests/711" --output json
         """;
 
     private const string GetBranchesHelpText = """
