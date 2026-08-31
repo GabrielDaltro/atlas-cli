@@ -14,6 +14,10 @@ public interface IBitbucketPullRequestGateway
         PullRequestReference pullRequest,
         CancellationToken cancellationToken = default);
 
+    Task<PullRequestDiff> GetPullRequestDiffAsync(
+        PullRequestReference pullRequest,
+        CancellationToken cancellationToken = default);
+
     Task<int> GetReferencedPipelineBuildNumberAsync(
         PullRequestReference pullRequest,
         CancellationToken cancellationToken = default);

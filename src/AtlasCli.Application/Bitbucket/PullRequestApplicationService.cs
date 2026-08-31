@@ -42,6 +42,13 @@ public sealed class PullRequestApplicationService
         return _gateway.GetPullRequestBranchesAsync(pullRequest, cancellationToken);
     }
 
+    public Task<PullRequestDiff> GetDiffAsync(
+        PullRequestReference pullRequest,
+        CancellationToken cancellationToken = default)
+    {
+        return _gateway.GetPullRequestDiffAsync(pullRequest, cancellationToken);
+    }
+
     public async Task<PullRequestPipelineLog> GetLatestPipelineLogAsync(
         PullRequestReference pullRequest,
         CancellationToken cancellationToken = default)

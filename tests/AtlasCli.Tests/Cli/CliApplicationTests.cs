@@ -23,6 +23,7 @@ public sealed class CliApplicationTests
         Assert.Contains("Comandos:", standardOutput.ToString());
         Assert.Contains("bb-get-pr-reports", standardOutput.ToString());
         Assert.Contains("bb-get-pr-branches", standardOutput.ToString());
+        Assert.Contains("bb-get-pr-diff", standardOutput.ToString());
         Assert.Contains("bb-get-pr-pipeline-log", standardOutput.ToString());
         Assert.Equal(string.Empty, standardError.ToString());
     }
@@ -60,6 +61,24 @@ public sealed class CliApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("BB_<WORKSPACE>_GET_PR_BRANCHES_TOKEN", standardOutput.ToString());
         Assert.DoesNotContain("BB_<WORKSPACE>_GET_PR_REPORTS_TOKEN", standardOutput.ToString());
+        Assert.Equal(string.Empty, standardError.ToString());
+    }
+
+    [Fact]
+    public async Task ShouldPrintDiffCommandHelpWhenDiffHelpIsProvided()
+    {
+        using var standardOutput = new StringWriter();
+        using var standardError = new StringWriter();
+
+        var exitCode = await CliApplication.RunAsync(
+            ["bb-get-pr-diff", "--help"],
+            new DictionaryEnvironment(new Dictionary<string, string>()),
+            standardOutput,
+            standardError);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("BB_<WORKSPACE>_GET_PR_DIFF_TOKEN", standardOutput.ToString());
+        Assert.DoesNotContain("BB_<WORKSPACE>_GET_PR_BRANCHES_TOKEN", standardOutput.ToString());
         Assert.Equal(string.Empty, standardError.ToString());
     }
 
@@ -733,6 +752,113 @@ public sealed class CliApplicationTests
         Assert.True(json.RootElement.GetProperty("ok").GetBoolean());
         Assert.Equal("feature/minha-branch", json.RootElement.GetProperty("data").GetProperty("source").GetString());
         Assert.Equal("master", json.RootElement.GetProperty("data").GetProperty("target").GetString());
+    }
+
+    [Fact]
+    public async Task ShouldReturnDiffJsonEnvelopeWhenCommandIsGetPrDiff()
+    {
+        const string diff = """
+            diff --git a/src/Foo.cs b/src/Foo.cs
+            index 1111111..2222222 100644
+            --- a/src/Foo.cs
+            +++ b/src/Foo.cs
+            @@ -1 +1 @@
+            -old
+            +new
+            """;
+        var environment = new DictionaryEnvironment(new Dictionary<string, string>
+        {
+            ["BITBUCKET_WORKSPACE_EMAIL"] = "developer@example.com",
+            ["BB_WORKSPACE_GET_PR_DIFF_TOKEN"] = "token"
+        });
+        using var standardOutput = new StringWriter();
+        using var standardError = new StringWriter();
+        using var httpHandler = new QueueHttpMessageHandler(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(diff, Encoding.UTF8, "text/plain")
+            });
+
+        var exitCode = await CliApplication.RunAsync(
+            ["bb-get-pr-diff", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1", "--output", "json"],
+            environment,
+            standardOutput,
+            standardError,
+            httpHandler);
+
+        using var json = JsonDocument.Parse(standardOutput.ToString());
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, standardError.ToString());
+        Assert.True(json.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal(diff, json.RootElement.GetProperty("data").GetProperty("content").GetString());
+        Assert.Equal(
+            "https://api.bitbucket.org/2.0/repositories/workspace/repo/pullrequests/1/diff",
+            httpHandler.Requests.Single().RequestUri?.ToString());
+    }
+
+    [Fact]
+    public async Task ShouldFollowRedirectWhenBitbucketRedirectsPullRequestDiff()
+    {
+        const string diff = "diff --git a/src/Foo.cs b/src/Foo.cs";
+        var environment = new DictionaryEnvironment(new Dictionary<string, string>
+        {
+            ["BITBUCKET_WORKSPACE_EMAIL"] = "developer@example.com",
+            ["BB_WORKSPACE_GET_PR_DIFF_TOKEN"] = "token"
+        });
+        using var standardOutput = new StringWriter();
+        using var standardError = new StringWriter();
+        using var redirectResponse = new HttpResponseMessage(HttpStatusCode.Redirect);
+        redirectResponse.Headers.Location = new Uri(
+            "https://api.bitbucket.org/2.0/repositories/workspace/repo/diff/target..source");
+        using var httpHandler = new QueueHttpMessageHandler(
+            redirectResponse,
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(diff, Encoding.UTF8, "text/plain")
+            });
+
+        var exitCode = await CliApplication.RunAsync(
+            ["bb-get-pr-diff", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1"],
+            environment,
+            standardOutput,
+            standardError,
+            httpHandler);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(diff, standardOutput.ToString());
+        Assert.Equal(string.Empty, standardError.ToString());
+        Assert.Equal(2, httpHandler.Requests.Count);
+        Assert.Equal("Basic", httpHandler.Requests[1].Headers.Authorization?.Scheme);
+    }
+
+    [Fact]
+    public async Task ShouldNotForwardAuthorizationWhenDiffRedirectsToDifferentOrigin()
+    {
+        var environment = new DictionaryEnvironment(new Dictionary<string, string>
+        {
+            ["BITBUCKET_WORKSPACE_EMAIL"] = "developer@example.com",
+            ["BB_WORKSPACE_GET_PR_DIFF_TOKEN"] = "token"
+        });
+        using var standardOutput = new StringWriter();
+        using var standardError = new StringWriter();
+        using var redirectResponse = new HttpResponseMessage(HttpStatusCode.Redirect);
+        redirectResponse.Headers.Location = new Uri("https://diff.example.com/target..source");
+        using var httpHandler = new QueueHttpMessageHandler(
+            redirectResponse,
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("diff", Encoding.UTF8, "text/plain")
+            });
+
+        var exitCode = await CliApplication.RunAsync(
+            ["bb-get-pr-diff", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1"],
+            environment,
+            standardOutput,
+            standardError,
+            httpHandler);
+
+        Assert.Equal(0, exitCode);
+        Assert.Null(httpHandler.Requests[1].Headers.Authorization);
     }
 
     [Fact]

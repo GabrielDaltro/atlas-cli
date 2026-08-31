@@ -98,6 +98,17 @@ public sealed class PullRequestCommandLineTests
     }
 
     [Fact]
+    public void ShouldParseDiffCommandWhenCommandIsGetPrDiff()
+    {
+        var result = PullRequestCommandLine.Parse(
+            ["bb-get-pr-diff", "--pr", "https://bitbucket.org/workspace/repo/pull-requests/1"]);
+
+        Assert.False(result.IsHelp);
+        Assert.Null(result.Error);
+        Assert.Equal(PullRequestCommandKind.GetDiff, result.Options!.Command);
+    }
+
+    [Fact]
     public void ShouldParsePipelineLogCommandWhenCommandIsGetPrPipelineLog()
     {
         var result = PullRequestCommandLine.Parse(

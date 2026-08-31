@@ -9,5 +9,6 @@ public static class ErrorCodes
     public const string ResourceNotFound = "RESOURCE_NOT_FOUND";
     public const string BitbucketApiError = "BITBUCKET_API_ERROR";
     public const string SonarApiError = "SONAR_API_ERROR";
+    public const string JiraApiError = "JIRA_API_ERROR";
     public const string UnexpectedError = "UNEXPECTED_ERROR";
 }

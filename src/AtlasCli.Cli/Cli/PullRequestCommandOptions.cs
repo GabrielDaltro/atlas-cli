@@ -18,6 +18,7 @@ public sealed record PullRequestCommandOptions(
         PullRequestCommandKind.GetUncoveredLines => "GET_PR_REPORTS_TOKEN",
         PullRequestCommandKind.GetSonarIssues => "GET_PR_REPORTS_TOKEN",
         PullRequestCommandKind.GetBranches => "GET_PR_BRANCHES_TOKEN",
+        PullRequestCommandKind.GetDiff => "GET_PR_DIFF_TOKEN",
         PullRequestCommandKind.GetPipelineLog => "GET_PR_PIPELINE_LOG_TOKEN",
         _ => throw new InvalidOperationException($"Comando {Command} nao possui token configurado.")
     };

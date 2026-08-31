@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/AtlasCli.Application/AtlasCli.Application.csproj" />
     <Project Path="src/AtlasCli.Infrastructure.Bitbucket/AtlasCli.Infrastructure.Bitbucket.csproj" />
+    <Project Path="src/AtlasCli.Infrastructure.Jira/AtlasCli.Infrastructure.Jira.csproj" />
     <Project Path="src/AtlasCli.Cli/AtlasCli.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/">

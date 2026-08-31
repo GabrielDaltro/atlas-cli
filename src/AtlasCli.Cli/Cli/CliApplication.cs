@@ -1,6 +1,8 @@
 using AtlasCli.Application.Bitbucket;
+using AtlasCli.Application.Jira;
 using AtlasCli.Application.Sonar;
 using AtlasCli.Infrastructure.Bitbucket;
+using AtlasCli.Infrastructure.Jira;
 using AtlasCli.Infrastructure.Sonar;
 using AtlasCli.Cli.Output;
 
@@ -16,6 +18,17 @@ public static class CliApplication
         HttpMessageHandler? httpMessageHandler = null,
         CancellationToken cancellationToken = default)
     {
+        if (JiraCommandLine.IsJiraInvocation(args))
+        {
+            return await RunJiraAsync(
+                args,
+                environment,
+                standardOutput,
+                standardError,
+                httpMessageHandler,
+                cancellationToken);
+        }
+
         var parseResult = PullRequestCommandLine.Parse(args);
 
         if (parseResult.IsHelp)
@@ -54,7 +67,7 @@ public static class CliApplication
         var baseUrl = environment.GetVariable("BITBUCKET_BASE_URL");
 
         using var httpClient = httpMessageHandler is null
-            ? new HttpClient()
+            ? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
             : new HttpClient(httpMessageHandler);
 
         var bitbucketClient = new BitbucketClient(httpClient, baseUrl, credentials!);
@@ -100,6 +113,13 @@ public static class CliApplication
             {
                 var branches = await pullRequestApplicationService.GetBranchesAsync(pullRequest!, cancellationToken);
                 await BranchOutputWriter.WriteAsync(branches, parseResult.Options.OutputFormat, standardOutput);
+                return 0;
+            }
+
+            if (parseResult.Options.Command is PullRequestCommandKind.GetDiff)
+            {
+                var diff = await pullRequestApplicationService.GetDiffAsync(pullRequest!, cancellationToken);
+                await DiffOutputWriter.WriteAsync(diff, parseResult.Options.OutputFormat, standardOutput);
                 return 0;
             }
 
@@ -201,6 +221,96 @@ public static class CliApplication
         }
     }
 
+    private static async Task<int> RunJiraAsync(
+        string[] args,
+        IEnvironment environment,
+        TextWriter standardOutput,
+        TextWriter standardError,
+        HttpMessageHandler? httpMessageHandler,
+        CancellationToken cancellationToken)
+    {
+        var parseResult = JiraCommandLine.Parse(args);
+
+        if (parseResult.IsHelp)
+        {
+            await standardOutput.WriteLineAsync(GetJiraIssueHelpText);
+            return 0;
+        }
+
+        if (parseResult.Error is not null || parseResult.Options is null)
+        {
+            await ErrorOutputWriter.WriteAsync(
+                parseResult.Error ?? new CliError(ErrorCodes.ValidationError, "Parametros invalidos."),
+                parseResult.OutputFormat,
+                standardError);
+            return 1;
+        }
+
+        if (!TryResolveJiraIssue(parseResult.Options.Issue, environment.GetVariable("JIRA_BASE_URL"), out var issueKey, out var baseUrl, out var referenceError))
+        {
+            await ErrorOutputWriter.WriteAsync(
+                new CliError(ErrorCodes.AuthenticationOrConfigurationError, referenceError!),
+                parseResult.Options.OutputFormat,
+                standardError);
+            return 2;
+        }
+
+        if (!JiraCredentials.TryFromEnvironment(environment.GetVariable, out var credentials, out var credentialError))
+        {
+            await ErrorOutputWriter.WriteAsync(
+                new CliError(ErrorCodes.AuthenticationOrConfigurationError, credentialError!),
+                parseResult.Options.OutputFormat,
+                standardError);
+            return 2;
+        }
+
+        using var httpClient = httpMessageHandler is null
+            ? new HttpClient()
+            : new HttpClient(httpMessageHandler);
+
+        var jiraClient = new JiraClient(httpClient, baseUrl!, credentials!);
+        var jiraIssueApplicationService = new JiraIssueApplicationService(jiraClient);
+
+        try
+        {
+            var issue = await jiraIssueApplicationService.GetIssueAsync(issueKey!, cancellationToken);
+            await JiraIssueOutputWriter.WriteAsync(issue, parseResult.Options.OutputFormat, standardOutput);
+            return 0;
+        }
+        catch (JiraApiException exception) when (exception.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+        {
+            await ErrorOutputWriter.WriteAsync(
+                new CliError(ErrorCodes.AuthenticationOrConfigurationError, exception.Message),
+                parseResult.Options.OutputFormat,
+                standardError);
+            return 2;
+        }
+        catch (JiraApiException exception) when (exception.StatusCode is System.Net.HttpStatusCode.NotFound)
+        {
+            await ErrorOutputWriter.WriteAsync(
+                new CliError(ErrorCodes.ResourceNotFound, exception.Message),
+                parseResult.Options.OutputFormat,
+                standardError);
+            return 3;
+        }
+        catch (JiraApiException exception)
+        {
+            await ErrorOutputWriter.WriteAsync(
+                new CliError(ErrorCodes.JiraApiError, exception.Message),
+                parseResult.Options.OutputFormat,
+                standardError);
+            return 5;
+        }
+        catch (Exception exception)
+        {
+            await ErrorOutputWriter.WriteAsync(
+                new CliError(ErrorCodes.UnexpectedError, exception.Message),
+                parseResult.Options.OutputFormat,
+                standardError);
+            return 5;
+        }
+    }
+
     private static string GetHelpText(PullRequestCommandKind? command)
     {
         return command switch
@@ -211,6 +321,7 @@ public static class CliApplication
             PullRequestCommandKind.GetUncoveredLines => GetUncoveredLinesHelpText,
             PullRequestCommandKind.GetSonarIssues => GetSonarIssuesHelpText,
             PullRequestCommandKind.GetBranches => GetBranchesHelpText,
+            PullRequestCommandKind.GetDiff => GetDiffHelpText,
             PullRequestCommandKind.GetPipelineLog => GetPipelineLogHelpText,
             _ => GeneralHelpText
         };
@@ -226,7 +337,9 @@ public static class CliApplication
           bb-get-pr-uncovered-lines Le linhas novas sem cobertura de testes reportadas pelo Sonar.
           bb-get-pr-sonar-issues Le issues abertas do Sonar para um pull request.
           bb-get-pr-branches   Le as branches de origem e destino de um pull request.
+          bb-get-pr-diff       Le o diff unificado de um pull request.
           bb-get-pr-pipeline-log Le o log do pipeline referenciado no PR, do ultimo pipeline do commit ou de um build especifico.
+          jira-get-issue       Le o conteudo de um card Jira, incluindo comentarios e anexos.
 
         Formas equivalentes:
           atlascli bb-get-pr-comments ...
@@ -239,7 +352,9 @@ public static class CliApplication
           atlascli bb-get-pr-uncovered-lines --help
           atlascli bb-get-pr-sonar-issues --help
           atlascli bb-get-pr-branches --help
+          atlascli bb-get-pr-diff --help
           atlascli bb-get-pr-pipeline-log --help
+          atlascli jira-get-issue --help
 
         Opcoes comuns:
           --repo <workspace/repositorio>  Repositorio quando --pr recebe apenas o numero.
@@ -247,6 +362,32 @@ public static class CliApplication
           --url <url-do-pr>               Alias explicito para URL do PR.
           --output <table|json>           Formato de saida. Padrao: table.
           --help, -h                      Mostra ajuda.
+        """;
+
+    private const string GetJiraIssueHelpText = """
+        jira-get-issue
+
+        Le os campos principais, comentarios e metadados de anexos de um card Jira.
+
+        Uso:
+          atlascli jira-get-issue --issue <chave-ou-url-do-card> [--output table|json]
+          atlascli jira get-issue --issue <chave-ou-url-do-card> [--output table|json]
+
+        Opcoes:
+          --issue <chave-ou-url-do-card> Chave, como DYN-123, ou URL https://empresa.atlassian.net/browse/DYN-123.
+          --url <url-do-card>             Alias para --issue quando o card for informado por URL.
+          --output <table|json>           Formato de saida. Padrao: table.
+
+        Variaveis:
+          JIRA_EMAIL
+          JIRA_API_TOKEN
+          JIRA_BASE_URL                   Obrigatoria quando --issue recebe apenas a chave. Ex.: https://empresa.atlassian.net
+
+        Exemplo:
+          atlascli jira-get-issue --issue DYN-123 --output json
+
+        Observacao:
+          A saida lista os anexos e suas URLs de conteudo. O download dos arquivos nao e realizado por este comando.
         """;
 
     private const string GetCommentsHelpText = """
@@ -387,6 +528,27 @@ public static class CliApplication
           atlascli bb-get-pr-branches --pr "https://bitbucket.org/dynamoxteam/dotnet-apps-common-libs/pull-requests/682" --output json
         """;
 
+    private const string GetDiffHelpText = """
+        bb-get-pr-diff
+
+        Le o diff unificado de um pull request.
+
+        Uso:
+          atlascli bb-get-pr-diff --repo <workspace/repositorio> --pr <numero-do-pr> [--output table|json]
+          atlascli bb-get-pr-diff --pr <url-do-pr> [--output table|json]
+          atlascli bb-get-pr-diff --url <url-do-pr> [--output table|json]
+
+        Opcoes:
+          --output <table|json>           Formato de saida. Padrao: table.
+
+        Variaveis:
+          BITBUCKET_<WORKSPACE>_EMAIL
+          BB_<WORKSPACE>_GET_PR_DIFF_TOKEN
+
+        Exemplo:
+          atlascli bb-get-pr-diff --pr "https://bitbucket.org/dynamoxteam/dotnet-apps-common-libs/pull-requests/682" --output json
+        """;
+
     private const string GetPipelineLogHelpText = """
         bb-get-pr-pipeline-log
 
@@ -474,5 +636,59 @@ public static class CliApplication
         pullRequest = referenceResult.Reference!;
         repository = pullRequest.ToRepositoryReference();
         return true;
+    }
+
+    private static bool TryResolveJiraIssue(
+        string value,
+        string? configuredBaseUrl,
+        out string? issueKey,
+        out Uri? baseUrl,
+        out string? error)
+    {
+        issueKey = null;
+        baseUrl = null;
+        error = null;
+
+        if (Uri.TryCreate(value, UriKind.Absolute, out var issueUrl))
+        {
+            var pathSegments = issueUrl.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var browseIndex = Array.FindIndex(pathSegments, segment => string.Equals(segment, "browse", StringComparison.OrdinalIgnoreCase));
+
+            if (browseIndex < 0 || browseIndex + 1 >= pathSegments.Length || !IsJiraIssueKey(pathSegments[browseIndex + 1]))
+            {
+                error = "A URL do Jira deve ter o formato https://empresa.atlassian.net/browse/CHAVE-123.";
+                return false;
+            }
+
+            issueKey = pathSegments[browseIndex + 1];
+            baseUrl = new Uri(issueUrl.GetLeftPart(UriPartial.Authority), UriKind.Absolute);
+            return true;
+        }
+
+        if (!IsJiraIssueKey(value))
+        {
+            error = "--issue deve receber uma chave Jira valida, como DYN-123, ou uma URL do card.";
+            return false;
+        }
+
+        if (!Uri.TryCreate(configuredBaseUrl, UriKind.Absolute, out var configuredUri)
+            || configuredUri.Scheme is not ("https" or "http"))
+        {
+            error = "Configure JIRA_BASE_URL com a URL do Jira, por exemplo https://empresa.atlassian.net, ou informe a URL completa do card em --issue.";
+            return false;
+        }
+
+        issueKey = value;
+        baseUrl = configuredUri;
+        return true;
+    }
+
+    private static bool IsJiraIssueKey(string value)
+    {
+        var separatorIndex = value.LastIndexOf('-');
+        return separatorIndex > 0
+            && separatorIndex < value.Length - 1
+            && value[..separatorIndex].All(character => char.IsLetterOrDigit(character) || character is '_')
+            && value[(separatorIndex + 1)..].All(char.IsDigit);
     }
 }

@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\AtlasCli.Application\AtlasCli.Application.csproj" />
     <ProjectReference Include="..\AtlasCli.Infrastructure.Bitbucket\AtlasCli.Infrastructure.Bitbucket.csproj" />
+    <ProjectReference Include="..\AtlasCli.Infrastructure.Jira\AtlasCli.Infrastructure.Jira.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -7,6 +7,8 @@ namespace AtlasCli.Infrastructure.Bitbucket;
 
 public sealed class BitbucketClient : IBitbucketPullRequestGateway
 {
+    private const int MaxDiffRedirects = 5;
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly HttpClient _httpClient;
@@ -123,6 +125,57 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
         return new PullRequestBranches(
             pullRequestDetails.Source.Branch.Name,
             pullRequestDetails.Destination.Branch.Name);
+    }
+
+    public async Task<PullRequestDiff> GetPullRequestDiffAsync(
+        PullRequestReference pullRequest,
+        CancellationToken cancellationToken = default)
+    {
+        var currentUrl = new Uri(BuildPullRequestDiffUrl(pullRequest));
+
+        for (var redirectCount = 0; ; redirectCount++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, currentUrl);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/plain"));
+
+            if (HasSameOrigin(currentUrl, _apiBaseUrl))
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue(
+                    "Basic",
+                    _credentials.ToBasicAuthenticationParameter());
+            }
+
+            using var response = await _httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+
+            if (IsRedirect(response.StatusCode) && response.Headers.Location is not null)
+            {
+                if (redirectCount >= MaxDiffRedirects)
+                {
+                    throw new BitbucketApiException(
+                        System.Net.HttpStatusCode.BadGateway,
+                        $"Bitbucket excedeu o limite de redirecionamentos ao ler o diff do PR {pullRequest.Workspace}/{pullRequest.Repository}#{pullRequest.Number}.");
+                }
+
+                currentUrl = response.Headers.Location.IsAbsoluteUri
+                    ? response.Headers.Location
+                    : new Uri(currentUrl, response.Headers.Location);
+                continue;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var details = await response.Content.ReadAsStringAsync(cancellationToken);
+                throw new BitbucketApiException(
+                    response.StatusCode,
+                    BuildErrorMessage(pullRequest, "diff", response, details));
+            }
+
+            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            return new PullRequestDiff(content);
+        }
     }
 
     public async Task<int> GetReferencedPipelineBuildNumberAsync(
@@ -415,6 +468,11 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
         return new Uri(_apiBaseUrl, relativeUrl).ToString();
     }
 
+    private string BuildPullRequestDiffUrl(PullRequestReference pullRequest)
+    {
+        return $"{BuildPullRequestUrl(pullRequest)}/diff";
+    }
+
     private async Task<BitbucketPullRequest> GetPullRequestAsync(
         PullRequestReference pullRequest,
         CancellationToken cancellationToken)
@@ -617,6 +675,18 @@ public sealed class BitbucketClient : IBitbucketPullRequestGateway
     private static string? FirstConfigured(params string?[] values)
     {
         return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+    }
+
+    private static bool IsRedirect(System.Net.HttpStatusCode statusCode)
+    {
+        return (int)statusCode is 301 or 302 or 303 or 307 or 308;
+    }
+
+    private static bool HasSameOrigin(Uri first, Uri second)
+    {
+        return string.Equals(first.Scheme, second.Scheme, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(first.Host, second.Host, StringComparison.OrdinalIgnoreCase)
+            && first.Port == second.Port;
     }
 
     private static string BuildErrorMessage(

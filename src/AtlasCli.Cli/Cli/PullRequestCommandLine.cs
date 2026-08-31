@@ -190,6 +190,13 @@ public static class PullRequestCommandLine
             return true;
         }
 
+        if (IsCommand(args[0], "bb-get-pr-diff"))
+        {
+            command = PullRequestCommandKind.GetDiff;
+            nextIndex = 1;
+            return true;
+        }
+
         if (IsCommand(args[0], "bb-get-pr-pipeline-log"))
         {
             command = PullRequestCommandKind.GetPipelineLog;
@@ -240,6 +247,13 @@ public static class PullRequestCommandLine
         if (IsCommand(args[1], "get-pr-branches"))
         {
             command = PullRequestCommandKind.GetBranches;
+            nextIndex = 2;
+            return true;
+        }
+
+        if (IsCommand(args[1], "get-pr-diff"))
+        {
+            command = PullRequestCommandKind.GetDiff;
             nextIndex = 2;
             return true;
         }

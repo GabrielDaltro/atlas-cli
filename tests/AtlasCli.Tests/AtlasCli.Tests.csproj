@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\AtlasCli.Cli\AtlasCli.Cli.csproj" />
     <ProjectReference Include="..\..\src\AtlasCli.Application\AtlasCli.Application.csproj" />
     <ProjectReference Include="..\..\src\AtlasCli.Infrastructure.Bitbucket\AtlasCli.Infrastructure.Bitbucket.csproj" />
+    <ProjectReference Include="..\..\src\AtlasCli.Infrastructure.Jira\AtlasCli.Infrastructure.Jira.csproj" />
   </ItemGroup>
 
 </Project>

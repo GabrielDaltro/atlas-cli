@@ -8,5 +8,6 @@ public enum PullRequestCommandKind
     GetUncoveredLines,
     GetSonarIssues,
     GetBranches,
+    GetDiff,
     GetPipelineLog
 }
