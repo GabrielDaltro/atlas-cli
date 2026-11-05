@@ -1,0 +1,4 @@
+interface:
+  display_name: "Atlas CLI"
+  short_description: "Cards do Jira e consultas de PRs no Bitbucket"
+  default_prompt: "Use $atlas-cli para consultar cards no Jira ou dados de um pull request do Bitbucket."
